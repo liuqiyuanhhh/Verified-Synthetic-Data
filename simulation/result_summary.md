@@ -1,7 +1,7 @@
 ### Conditional VAE  
 #### MNIST Data
 
-We begin with ~60,000 real MNIST images. From this dataset, we use 40,000 samples to train the CVAE model. After training, we generate 60,000 synthetic images by sampling from the model.
+We begin with ~60,000 real MNIST images. From this dataset, we use 40,000 samples to train the CVAE model. After training, we generate 60,000 synthetic images(6,000 samples per digit) by sampling from the model.
 
 To evaluate the quality of the generated data, we train a discriminator to classify whether an image is real or synthetic, using all 60,000 real images and the 60,000 generated samples. (Serve as a stronger verifier that trained on larger dataset)
 
