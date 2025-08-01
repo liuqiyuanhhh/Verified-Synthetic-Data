@@ -48,7 +48,7 @@ Visually, Model 2 produces more realistic results compared to Model 1. **Why the
 
 #### Thoughts
 1. FID measures the dissimilarity between the distribution of generated data and real data, capturing both the quality and diversity of the generated samples.
-2. Are there any other criteria to evaluate the new model?
+2. Are there any other criteria to evaluate the new model? (Use the synthetic data for downstream task?)
 
 
 
