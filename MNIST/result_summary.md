@@ -20,17 +20,28 @@ Among the synthetic samples, only about **1%** receive a discriminator probabili
 |   9   | 112   |     18.6%      |
 
 Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using the conditional VAE. We then filter the synthetic data by retaining only samples with discriminator confidence $p>0.5$, resulting in **75,242** high-quality synthetic samples. When training the CVAE on 40,000 real MNIST images, we obtain a Fréchet Inception Distance (FID) score of **0.02**. In comparison, training the same model on the filtered synthetic data yields an FID score of **0.08**.
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/8d0d63da-760e-4a7f-92e5-be349b33dae6" width="300" alt="Model 1"/>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://github.com/user-attachments/assets/31fc28b9-b06b-4a20-8f7f-404873bd8ad1" width="300" alt="Model 2"/>
-</p>
-
-<p align="center">
-  <b>Model 1</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>Model 2</b>
-</p>
-
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/f8497b06-315a-487c-af31-0962671b48c1" width="300" alt="Real Data"/>
+      <div><b>Real Data</b></div>
+    </td>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/3390d731-5725-4185-bc02-9079c2eb1e19" width="300" alt="Model 1"/>
+      <div><b>Model 1</b></div>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/e9c77de7-7ec0-4ba5-8624-60f50252f25d" width="300" alt="Filtered Model 1"/>
+      <div><b>Filtered Model 1</b></div>
+    </td>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/06692d9f-18df-42da-809a-8cd01dacaa24" width="300" alt="Model 2"/>
+      <div><b>Model 2</b></div>
+    </td>
+  </tr>
+</table>
 
 Visually, Model 2 produces more realistic results compared to Model 1. **Why the FID is larger?**
 
