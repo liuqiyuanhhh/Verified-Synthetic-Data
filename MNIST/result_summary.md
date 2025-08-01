@@ -21,14 +21,18 @@ Among the synthetic samples, only about **1%** receive a discriminator probabili
 
 Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using the conditional VAE. We then filter the synthetic data by retaining only samples with discriminator confidence $p>0.5$, resulting in **75,242** high-quality synthetic samples. When training the CVAE on 40,000 real MNIST images, we obtain a Fréchet Inception Distance (FID) score of **0.02**. In comparison, training the same model on the filtered synthetic data yields an FID score of **0.08**.
 
-Model 1:
-<img width="1170" height="1228" alt="model1" src="https://github.com/user-attachments/assets/8d0d63da-760e-4a7f-92e5-be349b33dae6" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/8d0d63da-760e-4a7f-92e5-be349b33dae6" width="300" alt="Model 1"/>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="https://github.com/user-attachments/assets/31fc28b9-b06b-4a20-8f7f-404873bd8ad1" width="300" alt="Model 2"/>
+</p>
 
-Model 2:
-<img width="1170" height="1228" alt="model2" src="https://github.com/user-attachments/assets/31fc28b9-b06b-4a20-8f7f-404873bd8ad1" />
+<p align="center">
+  <b>Model 1</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>Model 2</b>
+</p>
 
 
-Visually the Model 2 is better than Model 1.
+Visually, Model 2 produces more realistic results compared to Model 1. **Why the FID is larger?**
 
 
 #### Thoughts
