@@ -19,7 +19,7 @@ Among the synthetic samples, only about **1%** receive a discriminator probabili
 | **8** |  20   |     **3.3%**   |
 |   9   | 112   |     18.6%      |
 
-Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using the conditional VAE. We then filter the synthetic data by retaining only samples with discriminator confidence $p>0.5$, resulting in **75,242** high-quality synthetic samples. When training the CVAE on 40,000 real MNIST images, we obtain a Fréchet Inception Distance (FID) score of **0.02**. In comparison, training the same model on the filtered synthetic data yields an FID score of **0.08**.
+Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using the conditional VAE. We then filter the synthetic data by retaining only samples with discriminator confidence $p>0.5$, resulting in **75,242** high-quality synthetic samples. When training the CVAE on 40,000 real MNIST images, we obtain a Fréchet Inception Distance (FID) score of **0.02**. The filtered data and the real data's FID is **0.03**. In comparison, training the same model on the filtered synthetic data yields an FID score of **0.08**.
 <table align="center">
   <tr>
     <td align="center">
