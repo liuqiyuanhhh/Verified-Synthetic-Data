@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 import torch
 from torchvision.utils import make_grid
 import matplotlib.pyplot as plt
+import os
 
 sample_size = int(sys.argv[1])
 filter_threshold = float(sys.argv[2])
@@ -72,23 +73,14 @@ for epoch in range(epochs):
         if trigger_times >= patience:
             print("Early stopping triggered.")
             break
-
-# save the model to model_saved folder
-import os
 os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
+# save the model to model_saved folder
 torch.save(model.state_dict(), f"model_saved/cvae_mnist_{sample_size}.pth")
 print(f"Model saved to model_saved/cvae_mnist_{sample_size}.pth")
 
 ############################ generate synthetic data ############################
 
-sys.path.append("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
-import torch
-from cvae_model import CVAE 
-import os
-latent_dim = 20
-label_dim = 10
 model = CVAE(latent_dim=latent_dim, label_dim=label_dim)
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
 model.load_state_dict(torch.load(f"model_saved/cvae_mnist_{sample_size}.pth"))
 model.eval()
 
@@ -127,7 +119,6 @@ gen_imgs,y = generate_images_in_batches(
     device=device
 )
 
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
 save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}.pt"
 torch.save({
     'images': gen_imgs,    # Tensor [6000000, 1, 28, 28]
@@ -144,7 +135,6 @@ gen_imgs,y = generate_images_in_batches(
     device=device
 )
 
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
 save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}_2.pt"
 torch.save({
     'images': gen_imgs,    # Tensor [6000, 1, 28, 28]
@@ -153,13 +143,9 @@ torch.save({
 
 ############################ filter synthetic data ############################
 
-import torch
-from torch.utils.data import DataLoader
 from discriminator import Discriminator
-import os
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 D = Discriminator().to(device)
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
 D.load_state_dict(torch.load("model_saved/discriminator_mnist_cvae_2.pth"))
 D.eval()
 
@@ -251,7 +237,6 @@ for epoch in range(epochs):
             break
 
 # save the model to model_saved folder
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
 torch.save(model.state_dict(), f"model_saved/cvae_mnist_filtered_synthetic_data_{sample_size}.pth")
 
 # use the new model to generate synthetic data for evaluation
@@ -271,29 +256,17 @@ with torch.no_grad():
     gen_imgs = model.decode(z, y_onehot).view(-1, 1, 28, 28).cpu()  # shape: [60000, 1, 28, 28]
 
 # save the generated images and labels
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
 save_path = f"data_saved/synthetic_mnist_cvae_filtered_synthetic_model_generated_data_{sample_size}.pt"
 torch.save({"images": gen_imgs, "labels": y}, save_path)
 
 ############################ Model Evaluation ############################
 
 # FID
-
-from torchvision.datasets import MNIST
-from torchvision import transforms
-from torch.utils.data import TensorDataset
-import os
-import sys
-import torch
-
-sys.path.append("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
-
 from FID import calculate_fid_score
 
 transform = transforms.ToTensor()
 
-real_ds = MNIST(root='./data', train=False, download=True, transform=transform)
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
+real_ds = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
 ### Synthetic dataset
 synthetic = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}_2.pt")
 synthetic_ds = TensorDataset(synthetic['images'], torch.zeros(len(synthetic['images'])))
@@ -314,11 +287,6 @@ print(f"FID Score(real data and model 2 synthetic data): {fid_value:.2f}")
 
 # Reconstruction Loss
 
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from cvae_model import CVAE, cvae_loss
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Load model
 model = CVAE(latent_dim=20, label_dim=10).to(device)
 model.load_state_dict(torch.load(f"model_saved/cvae_mnist_{sample_size}.pth"))
@@ -355,21 +323,11 @@ print(f"  Avg Reconstruction (BCE) Loss: {total_recon_loss / num_samples:.4f}")
 print(f"  Avg KL Divergence: {total_kl / num_samples:.4f}")
 
 # get the loss of synthetic model
-import sys
-sys.path.append("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
-import torch
-from cvae_model import CVAE 
-import os
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-latent_dim = 20
-label_dim = 10
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
-#os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
 model.load_state_dict(torch.load(f"model_saved/cvae_mnist_filtered_synthetic_data_{sample_size}.pth"))
 model.eval()
-
 
 # Load test set
 test_dataset = datasets.MNIST(root="./data", train=False, transform=transforms.ToTensor())
