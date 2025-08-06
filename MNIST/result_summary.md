@@ -21,7 +21,7 @@ Among the synthetic samples, only about **1%** receive a discriminator probabili
 
 Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using the conditional VAE. We then filter the synthetic data by retaining only samples with discriminator confidence $p>0.5$, resulting in **75,242** high-quality synthetic samples.
 
-### Loss Comparison
+#### Loss Comparison
 
 **1. Reconstruction Loss and KL Divergence on MNIST Test Set**
 
@@ -69,5 +69,6 @@ Visually, Model 2 produces more realistic results compared to Model 1. **Why the
 2. Are there any other criteria to evaluate the new model? (Use the synthetic data for downstream task?)
 
 
-
+#### Next
+1. Smaller real data sample size.
 
