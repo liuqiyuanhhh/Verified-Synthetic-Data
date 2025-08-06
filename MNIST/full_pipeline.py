@@ -39,7 +39,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 def one_hot(labels, num_classes=10):
     return F.one_hot(labels, num_classes).float()
 
-best_val_loss = float('inf')
+best_train_loss = float('inf')
 patience = 5
 trigger_times = 0
 
@@ -66,7 +66,6 @@ for epoch in range(epochs):
     if avg_loss < best_train_loss:
         best_train_loss = avg_loss
         trigger_times = 0
-        torch.save(model.state_dict(), "best_model.pt")
     else:
         trigger_times += 1
         print(f"EarlyStopping counter: {trigger_times} out of {patience}")
@@ -110,7 +109,7 @@ def generate_images_in_batches(model, total_samples, latent_dim, num_classes, ba
 # large sample size for training
 latent_dim = model.latent_dim
 device = next(model.parameters()).device
-gen_imgs,y = generate_images_in_batches(
+gen_imgs_before_filter,y_before_filter = generate_images_in_batches(
     model=model,
     total_samples=6000000,
     latent_dim=latent_dim,
@@ -119,11 +118,11 @@ gen_imgs,y = generate_images_in_batches(
     device=device
 )
 
-save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}.pt"
-torch.save({
-    'images': gen_imgs,    # Tensor [6000000, 1, 28, 28]
-    'labels': y            # Tensor [6000000]
-}, save_path)
+#save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}.pt"
+#torch.save({
+#    'images': gen_imgs,    # Tensor [6000000, 1, 28, 28]
+#    'labels': y            # Tensor [6000000]
+#}, save_path)
 
 # smaller sample size for evaluation
 gen_imgs,y = generate_images_in_batches(
@@ -149,10 +148,10 @@ D = Discriminator().to(device)
 D.load_state_dict(torch.load("model_saved/discriminator_mnist_cvae_2.pth"))
 D.eval()
 
-data = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}.pt")
-synthetic_images = data['images']  
+#data = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}.pt")
+#synthetic_images = data['images']  
 
-synthetic_loader = DataLoader(synthetic_images, batch_size=512)
+synthetic_loader = DataLoader(gen_imgs_before_filter, batch_size=512)
 
 all_probs = []
 
@@ -167,17 +166,16 @@ all_probs = torch.cat(all_probs, dim=0)
 probs = all_probs.squeeze(1)
 
 # Load images and labels
-images = data['images']      # [N, 1, 28, 28]
-labels = data['labels']      # [N]
-
-# Create mask for p > 0.5
+images = gen_imgs_before_filter#data['images']      # [N, 1, 28, 28]
+labels = y_before_filter #data['labels']      # [N]
+# Create mask for p > filter_threshold
 mask = probs > filter_threshold
 
 # Apply mask
 filtered_images = images[mask]
 filtered_labels = labels[mask]
 
-print(f"Selected {filtered_images.shape[0]} samples with p > 0.4")
+print(f"Selected {filtered_images.shape[0]} samples with p > {filter_threshold}")
 # Save to file
 torch.save({
     'images': filtered_images,
@@ -204,7 +202,7 @@ train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 # Initialize model
 model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
+best_train_loss = float('inf')
 for epoch in range(epochs):
     model.train()
     total_loss = 0
@@ -228,7 +226,6 @@ for epoch in range(epochs):
     if avg_loss < best_train_loss:
         best_train_loss = avg_loss
         trigger_times = 0
-        torch.save(model.state_dict(), "best_model.pt")
     else:
         trigger_times += 1
         print(f"EarlyStopping counter: {trigger_times} out of {patience}")
