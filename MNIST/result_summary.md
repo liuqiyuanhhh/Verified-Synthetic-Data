@@ -70,5 +70,10 @@ Visually, Model 2 produces more realistic results compared to Model 1. **Why the
 
 
 #### Next
-1. Smaller real data sample size.
+1. Smaller real data sample size. (Use **5000** real data in first training, and generate 6,000,000 synthetic data, after filtering there will be **78,571** synthetic data for retraining.)
+
+| Model 1 - Raw | Model 1 - Filtered | Model 2 - Raw |
+|:-------------:|:------------------:|:-------------:|
+| <img src="https://github.com/user-attachments/assets/58d7e70b-3b92-473d-8bd0-dc7225ea7305" width="250px"> | <img src="https://github.com/user-attachments/assets/3e7a96fb-9861-4e38-8be0-7a537abbb43d" width="250px"> | <img src="https://github.com/user-attachments/assets/9e2161a1-54e1-409c-bba6-277eab08719f" width="250px"> |
+
 
