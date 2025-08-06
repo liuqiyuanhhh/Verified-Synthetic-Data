@@ -85,7 +85,6 @@ sys.path.append("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
 import torch
 from cvae_model import CVAE 
 import os
-sample_size = 10000
 latent_dim = 20
 label_dim = 10
 model = CVAE(latent_dim=latent_dim, label_dim=label_dim)
