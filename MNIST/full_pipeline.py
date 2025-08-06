@@ -184,6 +184,7 @@ torch.save({
 
 
 ############################ synthetic data retraining ############################
+
 from torch.utils.data import TensorDataset
 
 images = filtered_images  # shape: [N, 1, 28, 28]
@@ -193,15 +194,15 @@ print(f"Loaded {images.shape[0]} filtered synthetic samples")
 
 # Preprocess: flatten images and convert labels to one-hot
 images = images.view(-1, 784)  # flatten to [N, 784]
-labels_onehot = F.one_hot(labels, num_classes=label_dim).float()
 
 # Create dataset and dataloader
-dataset = TensorDataset(images, labels_onehot)
+dataset = TensorDataset(images, labels)
 train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 # Initialize model
 model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
 best_train_loss = float('inf')
 for epoch in range(epochs):
     model.train()
