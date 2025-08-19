@@ -38,19 +38,17 @@ Next, we generate 6,000,000 synthetic images (600,000 samples per digit) using t
 
 
 ### Generated Data
+| Model 0 (Real data) | Model 00 (Unfiltered synthetic) | Model 1 (Filtered synthetic) | Filtered Synthetic Data Samples |
+|---------------------|---------------------------------|--------------------------------|----------------------------------|
+| <img width="250" src="https://github.com/user-attachments/assets/b739798d-d442-400d-91f2-e0a4d73015db" /> | <img width="250" src="https://github.com/user-attachments/assets/35c50933-ad07-422c-aced-a11bfb436f2b" /> | <img width="250" src="https://github.com/user-attachments/assets/1ab8fb88-35c7-4b47-a58a-9a867e6bfde9" /> | <img width="250" src="https://github.com/user-attachments/assets/a5724c6c-2f82-4f2f-8918-805bdc34a5c8" /> |
 
-| Model 0 (Real data) | Model 00 (Unfiltered synthetic) | Model 1 (Filtered synthetic) |
-|---------------------|---------------------------------|--------------------------------|
-| <img width="300" src="https://github.com/user-attachments/assets/b739798d-d442-400d-91f2-e0a4d73015db" /> | <img width="300" src="https://github.com/user-attachments/assets/35c50933-ad07-422c-aced-a11bfb436f2b" /> | <img width="300" src="https://github.com/user-attachments/assets/1ab8fb88-35c7-4b47-a58a-9a867e6bfde9" /> |
 
 ## Loss
-| Model   | Reconstruction Loss | FID      | Precision | Recall |
-|---------|---------------------|----------|-----------|--------|
-| Model 0 | 85.30               | 144.00   | 0.2843    | 0.4767 |
-| Model 00| 85.76               | 175.89   | 0.1650    | 0.1915 |
-| Model 1 | 88.95               | 138.33   | 0.4288    | 0.2548 |
-
-
+| Model   | Reconstruction Loss | FID      | Precision | Recall | FID(1000 real data)|
+|---------|---------------------|----------|-----------|--------|----------|
+| Model 0 | 85.30               | 144.00   | 0.2843    | 0.4767 |180.14|
+| Model 00| 85.76               | 175.89   | 0.1650    | 0.1915 |193.72|
+| Model 1 | 88.95               | 138.33   | 0.4288    | 0.2548 |161.80|
 
 
 
