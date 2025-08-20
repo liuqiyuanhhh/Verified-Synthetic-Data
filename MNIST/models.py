@@ -62,9 +62,9 @@ class CVAE(nn.Module):
     def loss(self, x, y):
         mu, logvar = self.encoder.encode(x, y)
         z = self.reparameterize(mu, logvar)
-        recon_x = torch.sigmoid(self.decoder.decode(z, y))
+        recon_logits = self.decoder.decode(z, y)
         KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
+        BCE = F.binary_cross_entropy_with_logits(recon_logits, x, reduction='sum')
         return BCE + KLD, BCE, KLD
 
     def sample_x_given_y(self, y, num_samples):
