@@ -154,9 +154,11 @@ def generate_images_with_filtering(
     model: torch.nn.Module,
     save_directory: str,
     model_name: str,
-    samples_per_digit: int,
+    total_samples: int,
+    batch_size: int = 60000,
     discriminator: Optional[torch.nn.Module] = None,
-    selection_percentile: float = 20.0,
+    selection_percentile: float = 80.0,
+    per_digit_filtering: bool = True,
     verbose: bool = True
 ) -> Tuple[int, int]:
     """
@@ -167,7 +169,7 @@ def generate_images_with_filtering(
         save_directory: Directory to save .pt files
         samples_per_digit: Number of samples to generate for each digit (0-9)
         discriminator: Optional discriminator for filtering (if None, no filtering)
-        selection_percentile: Percentile for filtering (e.g., 80 means keep top 20%)
+        selection_percentile: Percentile for filtering (e.g., 80 means keep top 80%)
         batch_size: Batch size for generation (for memory efficiency)
         file_prefix: Prefix for saved .pt files
         verbose: Whether to print progress information
@@ -185,185 +187,167 @@ def generate_images_with_filtering(
     
     # Calculate total samples
     num_classes = 10
-    total_samples = samples_per_digit * num_classes
-    
-    if verbose:
-        logging.info(f"Generating {total_samples} samples ({samples_per_digit} per digit)")
-        if discriminator:
-            logging.info(f"Using discriminator filtering with {selection_percentile}th percentile")
-        logging.info(f"Saving to: {save_directory}")
-    
-    generated_images = []
-    all_labels = []    
-    
-    # Generate samples for each digit
-    for digit in range(num_classes):
-        if verbose:
-            logging.info(f"Generating digit {digit}: {samples_per_digit} samples")
-        
-        # Generate samples for this digit
-        samples = model.sample_x_given_y(digit, samples_per_digit)
-        
-        # Apply discriminator filtering if provided
-        if discriminator is not None:
-            with torch.no_grad():
-                # Reshape samples to image format for discriminator
-                samples_reshaped = samples.view(-1, 1, 28, 28)
-                # Get discriminator scores
-                scores = discriminator(samples_reshaped).squeeze(1)
-                
-                # Calculate threshold based on percentile
-                threshold = torch.quantile(scores, selection_percentile / 100.0)
-                
-                # Filter samples above threshold
-                mask = scores >= threshold
-                filtered_samples = samples[mask]
-                filtered_scores = scores[mask]
-                
-                if verbose:
-                    logging.info(f"Digit {digit}: {len(samples)} -> {len(filtered_samples)} samples after filtering at threshold {threshold}")
-                
-                # Use filtered samples
-                samples = filtered_samples
-                scores = filtered_scores
-        
-        # Store samples and labels
-        generated_images.append(samples)
-        all_labels.append(torch.full((len(samples),), digit, dtype=torch.long))
-    
-    # Concatenate all digits
-    if generated_images:
-        all_images = torch.cat(generated_images, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
-        
-        total_generated = samples_per_digit * num_classes
-        total_saved = len(all_images)
-        
-        if verbose:
-            logging.info(f"Total generated: {total_generated}, Total saved: {total_saved}")
-        
-        # Save all images at once
-        if discriminator:
-            batch_filename = f"{model_name}_{total_saved}_q{selection_percentile}.pt"
-        else:
-            batch_filename = f"{model_name}_{total_saved}.pt"
-        batch_path = os.path.join(save_directory, batch_filename)
-        
-        torch.save({
-            'images': all_images.cpu(),
-            'labels': all_labels.cpu()
-        }, batch_path)
-        
-        if verbose:
-            logging.info(f"Saved all {total_saved} samples to {batch_filename}")
-        
-        return total_generated, total_saved
-    else:
-        logging.warning("No samples were generated!")
-        return 0, 0
 
-def generate_images_sequential(
-    model: torch.nn.Module,
-    save_directory: str,
-    total_samples: int,
-    discriminator: Optional[torch.nn.Module] = None,
-    selection_percentile: float = 80.0,
-    batch_size: int = 1000,
-    file_prefix: str = "synthetic_sequential",
-    verbose: bool = True
-) -> Tuple[int, int]:
-    """
-    Generate synthetic images sequentially (matching original generate_images_in_batches logic).
-    
-    Args:
-        model: Trained CVAE model for generating images
-        save_directory: Directory to save .pt files
-        total_samples: Total number of samples to generate
-        discriminator: Optional discriminator for filtering
-        selection_percentile: Percentile for filtering
-        batch_size: Batch size for generation
-        file_prefix: Prefix for saved .pt files
-        verbose: Whether to print progress information
-        
-    Returns:
-        Tuple of (total_samples_generated, total_samples_saved)
-    """
-    model.eval()
-    if discriminator:
-        discriminator.eval()
-    
-    # Create save directory
-    os.makedirs(save_directory, exist_ok=True)
-    
-    device = next(model.parameters()).device
-    num_classes = 10
-    
     if verbose:
-        logging.info(f"Generating {total_samples} samples sequentially")
+        logging.info(f"Generating {total_samples} samples")
         if discriminator:
             logging.info(f"Using discriminator filtering with {selection_percentile}th percentile")
+        logging.info(f"Using batch size: {batch_size}")
         logging.info(f"Saving to: {save_directory}")
     
-    generated_images = []
-    all_labels = []
+    samples_to_generate = total_samples
+
     batch_idx = 0
+    total_generated = 0
+    total_saved = 0
     
-    for start in range(0, total_samples, batch_size):
-        end = min(start + batch_size, total_samples)
-        batch_size_actual = end - start
+    # Initialize containers for accumulating samples
+    to_write_images = None
+    to_write_labels = None
+    
+    while samples_to_generate > 0:
+        # Calculate samples per digit for this batch
+        samples_per_digit = (min(batch_size, samples_to_generate) + num_classes - 1) // num_classes
         
         if verbose:
-            logging.info(f"Generating batch {batch_idx}: samples {start}-{end-1}")
+            logging.info(f"Batch {batch_idx}: generating {samples_per_digit} samples per digit")
         
-        # Generate z and y (matching original logic)
-        z = torch.randn(batch_size_actual, model.latent_dim, device=device)
-        y = torch.arange(num_classes, device=device).repeat_interleave(total_samples // num_classes)[start:end]
-        y_onehot = F.one_hot(y, num_classes=num_classes).float().to(device)
+        this_batch_images = []
+        this_batch_labels = []
         
-        # Generate images
-        with torch.no_grad():
-            imgs = model.decode(z, y_onehot).view(-1, 1, 28, 28)
+        # Generate samples for each digit
+        for digit in range(num_classes):
+            if verbose:
+                logging.info(f"Generating digit {digit}: {samples_per_digit} samples")
+            
+            # Generate samples for this digit
+            samples = model.sample_x_given_y(digit, samples_per_digit)
             
             # Apply discriminator filtering if provided
-            if discriminator is not None:
-                scores = discriminator(imgs).squeeze(1)
-                threshold = torch.quantile(scores, selection_percentile / 100.0)
-                mask = scores >= threshold
+            if discriminator is not None and per_digit_filtering:
+                with torch.no_grad():
+                    samples_reshaped = samples.view(-1, 1, 28, 28)
+                    scores = discriminator(samples_reshaped).squeeze(1)
+                    threshold = torch.quantile(scores, 1.0 - selection_percentile / 100.0)
+                    mask = scores >= threshold
+                    
+                    if verbose:
+                        logging.info(f"Digit {digit}: {len(samples)} -> {torch.sum(mask).item()} samples after filtering")
+                    
+                    samples = samples[mask]
+            
+            # Store samples and labels
+            this_batch_images.append(samples)
+            this_batch_labels.append(torch.full((len(samples),), digit, dtype=torch.long, device=samples.device))
+        
+        # Concatenate all digits for this batch
+        if this_batch_images:
+            this_batch_images = torch.cat(this_batch_images, dim=0)
+            this_batch_labels = torch.cat(this_batch_labels, dim=0)
+
+            if discriminator is not None and not per_digit_filtering:
+                with torch.no_grad():
+                    samples_reshaped = this_batch_images.view(-1, 1, 28, 28)
+                    scores = discriminator(samples_reshaped).squeeze(1)
+                    threshold = torch.quantile(scores, 1.0 - selection_percentile / 100.0)
+                    mask = scores >= threshold
+                    
+                    if verbose:
+                        logging.info(f"All Digits: {len(this_batch_images)} -> {torch.sum(mask).item()} samples after filtering")
+                    
+                    this_batch_images = this_batch_images[mask]
+                    this_batch_labels = this_batch_labels[mask]
+            
+            total_generated += len(this_batch_images)
+            
+            # Check if we need to save (either batch is full or we're done)
+            current_total = len(this_batch_images)
+            if to_write_images is not None:
+                current_total += len(to_write_images)
+            
+            if current_total >= batch_size or samples_to_generate <= len(this_batch_images):
+                # Time to save
+                if to_write_images is not None:
+                    # Concatenate with existing samples
+                    all_images = torch.cat([to_write_images, this_batch_images], dim=0)
+                    all_labels = torch.cat([to_write_labels, this_batch_labels], dim=0)
+                else:
+                    # First batch, no existing samples
+                    all_images = this_batch_images
+                    all_labels = this_batch_labels
                 
-                imgs = imgs[mask]
-                y = y[mask]
+                # Save to disk
+                if discriminator:
+                    batch_filename = f"{model_name}_{len(all_images)}_q{selection_percentile}_b{batch_idx}.pt"
+                else:
+                    batch_filename = f"{model_name}_{len(all_images)}_b{batch_idx}.pt"
+                
+                batch_path = os.path.join(save_directory, batch_filename)
+                
+                torch.save({
+                    'images': all_images.cpu(),
+                    'labels': all_labels.cpu()
+                }, batch_path)
+                
+                total_saved += len(all_images)
                 
                 if verbose:
-                    logging.info(f"Batch {batch_idx}: {batch_size_actual} -> {len(imgs)} samples after filtering")
+                    logging.info(f"Saved batch {batch_idx}: {len(all_images)} samples to {batch_filename}")
+                
+                batch_idx += 1
+                # Clear containers and free memory
+                to_write_images = None
+                to_write_labels = None
+                del all_images, all_labels
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                
+            else:
+                # Accumulate samples for next batch
+                if to_write_images is None:
+                    # First time, just assign
+                    to_write_images = this_batch_images
+                    to_write_labels = this_batch_labels
+                else:
+                    # Concatenate with existing
+                    to_write_images = torch.cat([to_write_images, this_batch_images], dim=0)
+                    to_write_labels = torch.cat([to_write_labels, this_batch_labels], dim=0)
+                
+                if verbose:
+                    logging.info(f"Accumulated {len(to_write_images)} samples, waiting for more...")
+                
+            # Update counters even when accumulating
+            samples_to_generate -= len(this_batch_images)
             
-            if len(imgs) > 0:
-                generated_images.append(imgs.cpu())
-                all_labels.append(y.cpu())
         
-        batch_idx += 1
+        # Free memory for this batch
+        del this_batch_images, this_batch_labels
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    # Concatenate and save all batches at once
-    if generated_images:
-        all_images = torch.cat(generated_images, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
+    # Save any remaining samples
+    if to_write_images is not None and len(to_write_images) > 0:
+        if discriminator:
+            batch_filename = f"{model_name}_{len(to_write_images)}_q{selection_percentile}_b{batch_idx}.pt"
+        else:
+            batch_filename = f"{model_name}_{len(to_write_images)}_b{batch_idx}.pt"
         
-        total_saved = len(all_images)
-        
-        batch_filename = f"{file_prefix}_all.pt"
         batch_path = os.path.join(save_directory, batch_filename)
         
         torch.save({
-            'images': all_images,
-            'labels': all_labels
+            'images': to_write_images.cpu(),
+            'labels': to_write_labels.cpu()
         }, batch_path)
         
-        if verbose:
-            logging.info(f"Saved all {total_saved} samples to {batch_filename}")
+        total_saved += len(to_write_images)        
         
-        return total_samples, total_saved
-    else:
-        logging.warning("No samples were generated!")
-        return total_samples, 0
+        if verbose:
+            logging.info(f"Saved final batch {batch_idx}: {len(to_write_images)} samples to {batch_filename}")
+    
+    if verbose:
+        logging.info(f"Generation completed. Total generated: {total_generated}, Total saved: {total_saved}")
+    
+    return total_generated, total_saved
+
+
 
 def create_directory_based_dataloader(
     directory_path: str,
