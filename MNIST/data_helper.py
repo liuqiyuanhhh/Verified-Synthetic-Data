@@ -6,6 +6,7 @@ from typing import List, Tuple, Optional
 import logging
 import torch.nn.functional as F
 import numpy as np
+import gc
 
 
 class DirectoryBasedSyntheticDataset(Dataset):
@@ -97,6 +98,11 @@ class DirectoryBasedSyntheticDataset(Dataset):
         """Load file data into memory if it's not already loaded."""
         if self.current_file_path != file_path:
             try:
+                # Explicitly free previous file data to save memory
+                if hasattr(self, 'current_file_data') and self.current_file_data is not None:
+                    del self.current_file_data
+                    gc.collect()  # Force garbage collection
+
                 self.current_file_data = torch.load(
                     file_path, map_location='cpu')
                 self.current_file_path = file_path
@@ -158,6 +164,54 @@ class DirectoryBasedSyntheticDataset(Dataset):
                     f"Could not read batch info from {file_path}: {e}")
 
         return batch_info
+
+    def debug_dataset(self):
+        """
+        Debug method to check dataset integrity and print useful information.
+        """
+        print(f"=== Dataset Debug Info ===")
+        print(f"Total files: {len(self.pt_files)}")
+        print(f"Total samples: {len(self.sample_to_file_index)}")
+        print(f"Files found:")
+
+        for i, file_path in enumerate(self.pt_files):
+            try:
+                file_data = torch.load(file_path, map_location='cpu')
+                if 'images' in file_data and 'labels' in file_data:
+                    img_shape = file_data['images'].shape
+                    label_shape = file_data['labels'].shape
+                    print(f"  File {i}: {os.path.basename(file_path)}")
+                    print(f"    Images: {img_shape}, Labels: {label_shape}")
+                    print(
+                        f"    Sample range: {self._get_file_sample_range(file_path)}")
+                else:
+                    print(
+                        f"  File {i}: {os.path.basename(file_path)} - INVALID (missing keys)")
+            except Exception as e:
+                print(
+                    f"  File {i}: {os.path.basename(file_path)} - ERROR: {e}")
+
+        # Test a few samples
+        print(f"\nTesting sample access:")
+        for i in [0, len(self.sample_to_file_index)//2, len(self.sample_to_file_index)-1]:
+            try:
+                sample, label = self[i]
+                print(f"  Sample {i}: shape={sample.shape}, label={label}")
+            except Exception as e:
+                print(f"  Sample {i}: ERROR - {e}")
+
+    def _get_file_sample_range(self, file_path: str) -> Tuple[int, int]:
+        """Get the global sample index range for a specific file."""
+        start_idx = None
+        end_idx = None
+
+        for i, (fpath, _) in enumerate(self.sample_to_file_index):
+            if fpath == file_path:
+                if start_idx is None:
+                    start_idx = i
+                end_idx = i
+
+        return (start_idx, end_idx) if start_idx is not None else (None, None)
 
 
 def generate_images_with_filtering(
@@ -400,7 +454,6 @@ def generate_images_with_filtering(
 def create_directory_based_dataloader(
     directory_path: str,
     batch_size: int = 128,
-    shuffle: bool = True,
     num_workers: int = 0,
     file_pattern: str = "*.pt"
 ) -> DataLoader:
@@ -419,10 +472,11 @@ def create_directory_based_dataloader(
     """
     dataset = DirectoryBasedSyntheticDataset(directory_path, file_pattern)
 
+    # Do not shuffle the data for DirectoryBasedSyntheticDataset, it will cause memory issue
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=False,
         num_workers=num_workers,
         pin_memory=True if num_workers > 0 else False
     )
