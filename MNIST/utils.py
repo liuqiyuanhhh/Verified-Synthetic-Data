@@ -2,9 +2,86 @@ import torch
 import matplotlib.pyplot as plt
 import os
 import models as models
+import numpy as np
+import pandas as pd
+import data_helper as data_helper
+
+
+def save_model(model, model_name, path):
+    model_path = os.path.join(path, model_name + ".pth")
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
+
+
+def load_model(model_name, path, input_device=None, model_dimension=None):
+    name_tokens = model_name.split("_")
+    if name_tokens[0] == "cvae":
+        if model_dimension is None:
+            model = models.CVAE()
+        else:
+            model = models.CVAE(*model_dimension)
+    elif name_tokens[0] == "disc":
+        if model_dimension is None:
+            model = models.SyntheticDiscriminator()
+        else:
+            model = models.SyntheticDiscriminator(*model_dimension)
+    else:
+        raise ValueError(f"Invalid model name: {model_name}")
+
+    model.load_state_dict(torch.load(os.path.join(path, model_name + ".pth")))
+    model.eval()
+    if input_device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = input_device
+    model = model.to(device)
+    return model
+
+
+def compute_discriminator_score_distribution(model, disc_model, num_samples=50000, device=None):
+    synthetic_data, synthetic_labels = data_helper.generate_balanced_synthetic_data(
+        model, num_samples, device=device)
+
+    # Dictionary to store all scores and statistics
+    digit_stats = {}
+
+    for digit in range(10):
+        this_digit_data = synthetic_data[synthetic_labels == digit]
+        this_digit_scores = disc_model.score(
+            this_digit_data).cpu().detach().numpy().flatten()
+
+    # Calculate comprehensive statistics
+    digit_stats[digit] = {
+        'count': len(this_digit_scores),
+        'mean': this_digit_scores.mean(),
+        'std': this_digit_scores.std(),
+        'min': this_digit_scores.min(),
+
+        'q50': np.percentile(this_digit_scores, 50),  # median
+        'q90': np.percentile(this_digit_scores, 90),
+        'q95': np.percentile(this_digit_scores, 95),
+        'q99': np.percentile(this_digit_scores, 99),
+        'q99.5': np.percentile(this_digit_scores, 99.5),
+        'max': this_digit_scores.max()
+    }
+
+    # Create DataFrame
+    df_detailed = pd.DataFrame.from_dict(digit_stats, orient='index')
+
+    # Rename columns for clarity
+    df_detailed.columns = ['Count', 'Mean', 'Std', 'Min',
+                           'Q50 (Median)', 'Q90', 'Q95', 'Q99', 'Q99.5', 'Max']
+
+    # Round numeric columns to 4 decimal places
+    numeric_columns = ['Mean', 'Std', 'Min',
+                       'Q50 (Median)', 'Q90', 'Q95', 'Q99', 'Q99.5', 'Max']
+    df_detailed[numeric_columns] = df_detailed[numeric_columns].round(4)
+
+    return df_detailed
+
+
 # Plot n random samples for each digit
-
-
 def plot_samples_per_digit(num_samples, model):
     fig, axes = plt.subplots(10, num_samples, figsize=(2*num_samples, 20))
     fig.suptitle("10 Random Samples for Each Digit (0-9)", fontsize=16)
@@ -21,13 +98,6 @@ def plot_samples_per_digit(num_samples, model):
 
     plt.tight_layout()
     plt.show()
-
-
-def save_model(model, model_name, path):
-    model_path = os.path.join(path, model_name + ".pth")
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    torch.save(model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
 
 
 def display_samples_from_pt_file(num_samples_per_digit, pt_file_path):
@@ -101,28 +171,3 @@ def display_samples_from_pt_file(num_samples_per_digit, pt_file_path):
 
     plt.tight_layout()
     plt.show()
-
-
-def load_model(model_name, path, input_device=None, model_dimension=None):
-    name_tokens = model_name.split("_")
-    if name_tokens[0] == "cvae":
-        if model_dimension is None:
-            model = models.CVAE()
-        else:
-            model = models.CVAE(*model_dimension)
-    elif name_tokens[0] == "disc":
-        if model_dimension is None:
-            model = models.SyntheticDiscriminator()
-        else:
-            model = models.SyntheticDiscriminator(*model_dimension)
-    else:
-        raise ValueError(f"Invalid model name: {model_name}")
-
-    model.load_state_dict(torch.load(os.path.join(path, model_name + ".pth")))
-    model.eval()
-    if input_device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = input_device
-    model = model.to(device)
-    return model

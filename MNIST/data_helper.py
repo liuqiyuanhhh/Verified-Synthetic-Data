@@ -454,31 +454,32 @@ def generate_images_with_filtering(
 def create_directory_based_dataloader(
     directory_path: str,
     batch_size: int = 128,
-    num_workers: int = 0,
     file_pattern: str = "*.pt"
 ) -> DataLoader:
     """
-    Create a DataLoader that reads from multiple .pt files in a directory.
+    Create a DataLoader for the DirectoryBasedSyntheticDataset.
+
+    Note: num_workers is hardcoded to 0 because multiple workers cause memory issues
+    with disk-based datasets that switch between files.
 
     Args:
         directory_path: Path to directory containing .pt files
-        batch_size: Batch size for training
-        shuffle: Whether to shuffle samples within batches
-        num_workers: Number of worker processes (0 for single process)
-        file_pattern: Pattern to match .pt files
+        batch_size: Batch size for the DataLoader
+        file_pattern: Pattern to match .pt files (default: "*.pt")
 
     Returns:
-        DataLoader instance
+        DataLoader configured for disk-based synthetic data
     """
     dataset = DirectoryBasedSyntheticDataset(directory_path, file_pattern)
 
     # Do not shuffle the data for DirectoryBasedSyntheticDataset, it will cause memory issue
+    # num_workers hardcoded to 0 to prevent memory issues with file switching
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True if num_workers > 0 else False
+        num_workers=0,  # Hardcoded to prevent memory issues
+        pin_memory=False  # No need for pin_memory with single worker
     )
 
 
