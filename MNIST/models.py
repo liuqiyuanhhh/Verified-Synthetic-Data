@@ -44,8 +44,9 @@ class Encoder(nn.Module):
 
 
 class CVAE(nn.Module):
-    def __init__(self, input_dim=784, label_dim=10, latent_dim=20):
+    def __init__(self, input_dim=784, label_dim=10, latent_dim=20, name=""):
         super(CVAE, self).__init__()
+        self.name = name
         self.latent_dim = latent_dim
         self.label_dim = label_dim
 
@@ -104,6 +105,15 @@ class CVAE(nn.Module):
         logits = self.decoder.decode(z, y_onehot)
 
         return torch.sigmoid(logits)
+
+    def get_name(self):
+        return self.name
+
+    def __str__(self):
+        return f"CVAE(name={self.name}, latent_dim={self.latent_dim})"
+
+    def __repr__(self):
+        return f"CVAE(name={self.name}, latent_dim={self.latent_dim})"
 
 
 class SyntheticDiscriminator(nn.Module):

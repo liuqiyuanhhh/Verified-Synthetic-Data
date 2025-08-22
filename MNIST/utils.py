@@ -5,6 +5,7 @@ import models as models
 import numpy as np
 import pandas as pd
 import data_helper as data_helper
+import random
 
 
 def save_model(model, model_name, path):
@@ -83,7 +84,7 @@ def compute_discriminator_score_distribution(model, disc_model, num_samples=5000
 
 # Plot n random samples for each digit
 def plot_samples_per_digit(num_samples, model):
-    fig, axes = plt.subplots(10, num_samples, figsize=(2*num_samples, 20))
+    fig, axes = plt.subplots(10, num_samples, figsize=(num_samples, 12))
     fig.suptitle("10 Random Samples for Each Digit (0-9)", fontsize=16)
 
     for digit in range(10):
@@ -123,7 +124,7 @@ def display_samples_from_pt_file(num_samples_per_digit, pt_file_path):
 
     # Create figure
     fig, axes = plt.subplots(10, num_samples_per_digit,
-                             figsize=(2*num_samples_per_digit, 20))
+                             figsize=(num_samples_per_digit, 12))
     fig.suptitle(
         f"Random Samples from {os.path.basename(pt_file_path)}", fontsize=16)
 
@@ -171,3 +172,84 @@ def display_samples_from_pt_file(num_samples_per_digit, pt_file_path):
 
     plt.tight_layout()
     plt.show()
+
+
+def create_balanced_subset_indices(dataset, seed=0):
+    """
+    Create balanced subset indices by grouping indices by digit and shuffling each separately.
+
+    Args:
+        dataset: Full MNIST dataset
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dictionary with digit -> shuffled indices mapping
+    """
+    # Set seed for reproducibility
+    random.seed(seed)
+
+    # Group indices by digit
+    digit_indices = {i: [] for i in range(10)}
+
+    for i in range(len(dataset)):
+        _, label = dataset[i]
+        digit = label
+        digit_indices[digit].append(i)
+
+    # Shuffle each digit's indices separately
+    for digit in range(10):
+        random.shuffle(digit_indices[digit])
+
+    return digit_indices
+
+
+def get_balanced_subset(digit_indices, subset_size):
+    """
+    Get a balanced subset by taking equal samples from each digit's shuffled indices.
+
+    Args:        
+        digit_indices: Dictionary with digit -> shuffled indices mapping
+        subset_size: Size of subset to return
+
+    Returns:
+        Subset with balanced digit distribution
+    """
+    # Calculate samples per digit
+    samples_per_digit = subset_size // 10
+
+    # Take samples from each digit
+    subset_indices = []
+    for digit in range(10):
+        # Take samples_per_digit samples, plus one extra for first 'remainder' digits
+
+        num_samples = samples_per_digit
+
+        if num_samples > len(digit_indices[digit]):
+            print(
+                f"Warning: Only {len(digit_indices[digit])} samples for digit {digit}, taking all available")
+            num_samples = len(digit_indices[digit])
+
+        # Take first num_samples from this digit's shuffled indices
+        subset_indices.extend(digit_indices[digit][:num_samples])
+
+    return subset_indices
+
+
+def verify_balance(dataset):
+    """
+    Verify the balance of a dataset by counting samples per digit.
+
+    Args:
+        dataset: Dataset to verify        
+    """
+    digit_counts = {}
+    for i in range(len(dataset)):
+        _, label = dataset[i]
+        digit = label
+        digit_counts[digit] = digit_counts.get(digit, 0) + 1
+
+    print(f"\n digit distribution:")
+    for digit in sorted(digit_counts.keys()):
+        print(f"Digit {digit}: {digit_counts[digit]} samples")
+
+    return digit_counts

@@ -142,6 +142,8 @@ class DirectoryBasedSyntheticDataset(Dataset):
         image = images[local_idx]
         label = labels[local_idx]
 
+        image = image.view(1, 28, 28)
+        label = int(label.item()) if hasattr(label, 'item') else int(label)
         return image, label
 
     def get_batch_info(self) -> List[Tuple[str, int]]:
@@ -447,6 +449,214 @@ def generate_images_with_filtering(
     if verbose:
         print(
             f"Generation completed. Total generated: {total_generated}, Total saved: {total_saved}")
+
+    return total_generated, total_saved
+
+
+def generate_balanced_images_with_filtering(
+    model: torch.nn.Module,
+    save_directory: str,
+    model_name: str,
+    total_samples: int,
+    batch_size: int = 60000,
+    discriminator: Optional[torch.nn.Module] = None,
+    selection_threshold: Optional[float] = None,
+    use_quantile_filtering: bool = False,
+    max_iterations: int = 20000,
+    verbose: bool = True
+) -> Tuple[int, int]:
+    """
+    Generate balanced synthetic images with equal samples per digit after filtering.
+
+    This function ensures each digit has exactly the same number of samples after filtering,
+    regardless of how difficult it is to generate high-quality samples for certain digits.
+
+    Args:
+        model: Trained CVAE model for generating images
+        save_directory: Directory to save .pt files
+        model_name: Name of the model for file naming
+        total_samples: Total number of samples to generate (must be divisible by 10)
+        batch_size: Batch size for saving files (must be divisible by 10)
+        discriminator: Optional discriminator for filtering (if None, no filtering)
+        selection_percentile: Percentile for filtering when use_quantile_filtering=True (e.g., 80 means keep top 80%)
+        selection_threshold: Score threshold for filtering when use_quantile_filtering=False
+        use_quantile_filtering: If True, use percentile-based filtering; if False, use threshold-based filtering
+        verbose: Whether to print progress information
+
+    Returns:
+        Tuple of (total_samples_generated, total_samples_saved)
+    """
+    model.eval()
+    if discriminator:
+        discriminator.eval()
+
+    # Validate inputs
+    if total_samples % 10 != 0:
+        raise ValueError(
+            "total_samples must be divisible by 10 for balanced generation")
+    if batch_size % 10 != 0:
+        raise ValueError(
+            "batch_size must be divisible by 10 for balanced generation")
+
+    samples_per_digit = total_samples // 10
+    batch_samples_per_digit = batch_size // 10
+
+    if use_quantile_filtering and (selection_threshold < 0 or selection_threshold > 1):
+        raise ValueError(
+            "selection_threshold must be between 0 and 1 when use_quantile_filtering=True")
+
+    # Create save directory
+    save_directory = os.path.join(save_directory, model_name)
+    os.makedirs(save_directory, exist_ok=True)
+
+    # Remove any existing .pt files in the directory
+    existing_pt_files = glob.glob(os.path.join(save_directory, "*.pt"))
+    if existing_pt_files:
+        if verbose:
+            print(
+                f"Removing {len(existing_pt_files)} existing .pt files from {save_directory}")
+        for pt_file in existing_pt_files:
+            os.remove(pt_file)
+
+    if verbose:
+        print(
+            f"Generating {total_samples} samples ({samples_per_digit} per digit)")
+        if discriminator:
+            if use_quantile_filtering:
+                print(
+                    f"Using quantile-based filtering with keeping {selection_threshold} percentile of samples")
+            else:
+                print(
+                    f"Using threshold-based filtering with threshold {selection_threshold}")
+        print(
+            f"Batch size: {batch_size} ({batch_samples_per_digit} per digit)")
+        print(f"Saving to: {save_directory}")
+
+    total_generated = 0
+    total_saved = 0
+    batch_idx = 0
+
+    # Process in batches
+    for batch_start in range(0, total_samples, batch_size):
+        batch_end = min(batch_start + batch_size, total_samples)
+        current_batch_size = batch_end - batch_start
+        current_samples_per_digit = current_batch_size // 10
+
+        if verbose:
+            print(
+                f"\n--- Processing batch {batch_idx + 1}: {current_batch_size} samples ({current_samples_per_digit} per digit) ---")
+
+        # Generate balanced samples for this batch
+        batch_images = []
+        batch_labels = []
+
+        for digit in range(10):
+            if verbose:
+                print(f"Generating digit {digit}...")
+
+            digit_samples = []
+            digit_generated = 0
+            digits_count = 0
+            safe_count = 0
+
+            # Keep generating until we have enough samples for this digit
+            while digits_count < current_samples_per_digit and safe_count < max_iterations:
+                safe_count += 1
+                # Generate a batch of samples for this digit
+                # Generate extra to account for filtering
+                samples = model.sample_x_given_y(
+                    digit, batch_samples_per_digit)
+                digit_generated += len(samples)
+
+                if discriminator is not None:
+                    # Apply filtering
+                    with torch.no_grad():
+                        scores = discriminator.score(samples).squeeze(1)
+
+                        if use_quantile_filtering:
+                            # Use percentile-based filtering (selection_threshold is the percentile)
+                            threshold = torch.quantile(
+                                scores, 1.0 - selection_threshold)
+                        else:
+                            # Use threshold-based filtering
+                            threshold = selection_threshold
+
+                        mask = scores >= threshold
+                        filtered_samples = samples[mask]
+
+                        if verbose and len(samples) > 0:
+                            filter_rate = len(
+                                filtered_samples) / len(samples) * 100
+                            print(
+                                f"  Digit {digit}: {len(samples)} -> {len(filtered_samples)} samples (filter rate: {filter_rate:.1f}%)")
+
+                        samples = filtered_samples
+
+                # Add samples to digit collection
+                if len(samples) > current_samples_per_digit - digits_count:
+                    samples = samples[:(
+                        current_samples_per_digit - digits_count)]
+
+                digit_samples.append(samples)
+                digits_count += len(samples)
+
+            # Concatenate all samples for this digit and take exactly what we need
+            digit_samples = torch.cat(digit_samples, dim=0)
+
+            # Create labels for this digit
+            digit_labels = torch.full(
+                (len(digit_samples),), digit, dtype=torch.long, device=digit_samples.device)
+
+            batch_images.append(digit_samples)
+            batch_labels.append(digit_labels)
+            total_generated += digit_generated
+
+            if verbose:
+                print(
+                    f"  Digit {digit}: Generated {digit_generated} samples, kept {len(digit_samples)}")
+
+        # Concatenate all digits for this batch
+        batch_images = torch.cat(batch_images, dim=0)
+        batch_labels = torch.cat(batch_labels, dim=0)
+
+        # Create shuffled indices
+        indices = torch.randperm(len(batch_images))
+        batch_images = batch_images[indices]
+        batch_labels = batch_labels[indices]
+
+        # Save batch to disk
+        if discriminator:
+            if use_quantile_filtering:
+                batch_filename = f"{model_name}_{len(batch_images)}_q{selection_threshold}_b{batch_idx}.pt"
+            else:
+                batch_filename = f"{model_name}_{len(batch_images)}_t{selection_threshold}_b{batch_idx}.pt"
+        else:
+            batch_filename = f"{model_name}_{len(batch_images)}_b{batch_idx}.pt"
+
+        batch_path = os.path.join(save_directory, batch_filename)
+
+        torch.save({
+            'images': batch_images.cpu(),
+            'labels': batch_labels.cpu()
+        }, batch_path)
+
+        total_saved += len(batch_images)
+
+        if verbose:
+            print(
+                f"Saved batch {batch_idx}: {len(batch_images)} samples to {batch_filename}")
+
+        # Clean up memory
+        del batch_images, batch_labels
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        batch_idx += 1
+
+    if verbose:
+        print(f"\nGeneration completed.")
+        print(f"Total generated: {total_generated}")
+        print(f"Total saved: {total_saved}")
+        print(f"Filter efficiency: {total_saved/total_generated*100:.1f}%")
 
     return total_generated, total_saved
 

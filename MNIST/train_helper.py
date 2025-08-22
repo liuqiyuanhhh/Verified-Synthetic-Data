@@ -51,7 +51,6 @@ def train_model(
     best_loss = float('inf')
     trigger_times = 0
     total_samples = len(train_loader.dataset)
-    print(f"DEBUG - total_samples: {total_samples}")
 
     if verbose:
         logging.info(f"Starting training for {epochs} epochs")
@@ -112,10 +111,10 @@ def train_model(
                 summary_str = ", ".join(
                     [f"{k}: {v:.4f}" for k, v in total_summary.items()])
                 print(
-                    f"Epoch [{epoch+1}/{epochs}] completed. Average Loss: {avg_loss:.4f}, {summary_str}")
+                    f"Epoch [{epoch+1}/{epochs}] completed. Train Avg Loss: {avg_loss:.4f}, {summary_str}")
             else:
                 print(
-                    f"Epoch [{epoch+1}/{epochs}] completed. Average Loss: {avg_loss:.4f}")
+                    f"Epoch [{epoch+1}/{epochs}] completed. Train Avg Loss: {avg_loss:.4f}")
 
         # Early stopping
         if avg_loss < best_loss:
@@ -287,7 +286,7 @@ def train_model_with_validation(
 
         if verbose:
             print(
-                f"Epoch [{epoch+1}/{epochs}] completed. Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                f"Epoch [{epoch+1}/{epochs}] completed. Train Avg Loss: {avg_train_loss:.4f}, Val Avg Loss: {avg_val_loss:.4f}")
             # Print epoch summaries with accumulated statistics
             if train_total_summary and val_total_summary:
                 train_summary_str = ", ".join(
