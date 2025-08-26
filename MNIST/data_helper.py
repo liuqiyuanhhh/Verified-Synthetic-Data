@@ -15,16 +15,18 @@ class DirectoryBasedSyntheticDataset(Dataset):
     Each .pt file contains one batch of data with potentially different batch sizes.
     """
 
-    def __init__(self, directory_path: str, file_pattern: str = "*.pt"):
+    def __init__(self, directory_path: str, file_pattern: str = "*.pt", keep_data: bool = False):
         """
         Initialize dataset from directory containing .pt files.
 
         Args:
             directory_path: Path to directory containing .pt files
             file_pattern: Pattern to match .pt files (default: "*.pt")
+            keep_data: If True, directory will not be deleted when object goes out of scope (default: False)
         """
         self.directory_path = directory_path
         self.file_pattern = file_pattern
+        self.keep_data = keep_data
 
         # Find all .pt files in directory
         self.pt_files = self._find_pt_files()
@@ -42,6 +44,11 @@ class DirectoryBasedSyntheticDataset(Dataset):
 
         logging.info(
             f"Found {len(self.pt_files)} .pt files with {len(self.sample_to_file_index)} total samples")
+        if keep_data:
+            logging.info(f"Data will be preserved (keep_data=True)")
+        else:
+            logging.info(
+                f"Data will be automatically deleted when dataset goes out of scope (keep_data=False)")
 
     def _find_pt_files(self) -> List[str]:
         """Find all .pt files in the directory, sorted by name."""
@@ -214,6 +221,94 @@ class DirectoryBasedSyntheticDataset(Dataset):
                 end_idx = i
 
         return (start_idx, end_idx) if start_idx is not None else (None, None)
+
+    def __del__(self):
+        """
+        Destructor that deletes the directory containing the synthetic data.
+        This is called when the dataset object goes out of scope.
+
+        Warning: This will permanently delete the directory and all its contents!
+        """
+        if not self.keep_data:
+            try:
+                # Check if directory exists and is not empty
+                if os.path.exists(self.directory_path):
+                    # Remove all files in the directory first
+                    for file_path in self.pt_files:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logging.info(f"Deleted file: {file_path}")
+
+                    # Remove the directory itself
+                    os.rmdir(self.directory_path)
+                    logging.info(f"Deleted directory: {self.directory_path}")
+
+            except Exception as e:
+                # Log error but don't raise exception in destructor
+                logging.warning(
+                    f"Error during cleanup of {self.directory_path}: {e}")
+
+        # Clean up any loaded data
+        if hasattr(self, 'current_file_data') and self.current_file_data is not None:
+            del self.current_file_data
+            self.current_file_data = None
+
+    def cleanup_directory(self):
+        """
+        Manually trigger cleanup of the directory and its contents.
+        This method can be called explicitly to clean up the data.
+
+        Note: This method respects the keep_data flag. If keep_data=True, 
+        this method will not delete the directory.
+
+        Returns:
+            bool: True if cleanup was successful or skipped, False if cleanup failed
+        """
+        # Early return if keep_data is True
+        if self.keep_data:
+            logging.info(
+                f"Skipping cleanup for {self.directory_path} (keep_data=True)")
+            return True
+
+        try:
+            if os.path.exists(self.directory_path):
+                # Remove all files in the directory first
+                for file_path in self.pt_files:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logging.info(f"Deleted file: {file_path}")
+
+                # Remove the directory itself
+                os.rmdir(self.directory_path)
+                logging.info(
+                    f"Successfully cleaned up directory: {self.directory_path}")
+                return True
+            else:
+                logging.info(f"Directory {self.directory_path} does not exist")
+                return True
+
+        except Exception as e:
+            logging.error(
+                f"Error during manual cleanup of {self.directory_path}: {e}")
+            return False
+
+        finally:
+            # Clean up any loaded data
+            if hasattr(self, 'current_file_data') and self.current_file_data is not None:
+                del self.current_file_data
+                self.current_file_data = None
+
+    def __enter__(self):
+        """
+        Context manager entry point.
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit point. Automatically cleans up the directory.
+        """
+        self.cleanup_directory()
 
 
 def generate_images_with_filtering(
@@ -664,7 +759,8 @@ def generate_balanced_images_with_filtering(
 def create_directory_based_dataloader(
     directory_path: str,
     batch_size: int = 128,
-    file_pattern: str = "*.pt"
+    file_pattern: str = "*.pt",
+    keep_data: bool = False
 ) -> DataLoader:
     """
     Create a DataLoader for the DirectoryBasedSyntheticDataset.
@@ -676,11 +772,13 @@ def create_directory_based_dataloader(
         directory_path: Path to directory containing .pt files
         batch_size: Batch size for the DataLoader
         file_pattern: Pattern to match .pt files (default: "*.pt")
+        keep_data: If True, directory will not be deleted when dataset goes out of scope (default: False)
 
     Returns:
         DataLoader configured for disk-based synthetic data
     """
-    dataset = DirectoryBasedSyntheticDataset(directory_path, file_pattern)
+    dataset = DirectoryBasedSyntheticDataset(
+        directory_path, file_pattern, keep_data)
 
     # Do not shuffle the data for DirectoryBasedSyntheticDataset, it will cause memory issue
     # num_workers hardcoded to 0 to prevent memory issues with file switching
@@ -714,8 +812,8 @@ def generate_balanced_synthetic_data(synthetic_model, target_size, device=None):
     samples_per_digit = (target_size + num_classes -
                          1) // num_classes  # Ceiling division
 
-    print(
-        f"Generating {samples_per_digit} samples per digit for synthetic data")
+    # print(
+    #     f"Generating {samples_per_digit} samples per digit for synthetic data")
 
     # Generate synthetic data
     synthetic_model.eval()
@@ -767,7 +865,7 @@ def prepare_discriminator_dataset(real_dataset, synthetic_model, device=None):
 
     # Get real dataset size
     real_size = len(real_dataset)
-    print(f"Real dataset size: {real_size}")
+    # print(f"Real dataset size: {real_size}")
 
     # Generate synthetic data to match real dataset size
     synthetic_images, synthetic_labels = generate_balanced_synthetic_data(
@@ -796,9 +894,9 @@ def prepare_discriminator_dataset(real_dataset, synthetic_model, device=None):
     X_all = torch.cat([real_images, synthetic_images], dim=0)
     y_all = torch.cat([real_disc_labels, synthetic_disc_labels], dim=0)
 
-    print(f"Final combined dataset size: {len(X_all)}")
-    print(f"Real samples: {torch.sum(y_all).item()}")
-    print(f"Synthetic samples: {len(y_all) - torch.sum(y_all).item()}")
+    # print(f"Final combined dataset size: {len(X_all)}")
+    # print(f"Real samples: {torch.sum(y_all).item()}")
+    # print(f"Synthetic samples: {len(y_all) - torch.sum(y_all).item()}")
 
     # Return simple TensorDataset - DataLoader will handle shuffling
     return torch.utils.data.TensorDataset(X_all, y_all)

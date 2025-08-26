@@ -43,17 +43,111 @@ class Encoder(nn.Module):
         return mu, logvar
 
 
+class MLPEncoder(nn.Module):
+    def __init__(self, input_dim, hidden_dim=512, latent_dim=20):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim), nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+            nn.Linear(hidden_dim, 2 * latent_dim),
+        )
+
+    def encode(self, x, y=None):
+        xy = x if y is None else torch.cat([x, y], dim=1)
+        h = self.net(xy)
+        mu, logvar = torch.split(h, self.latent_dim, dim=1)
+        return mu, logvar
+
+
+class MLPDecoder(nn.Module):
+    def __init__(self, latent_dim, hidden_dim=512, output_dim=784):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim), nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+            nn.Linear(hidden_dim, output_dim)  # logits
+        )
+
+    def decode(self, z, y=None):
+        zy = z if y is None else torch.cat([z, y], dim=1)
+        return self.net(zy)  # (B,784) logits
+
+
+class ConvEncoder2D(nn.Module):
+    """expects x flat (B,784); returns (mu, logvar)"""
+
+    def __init__(self, input_dim, latent_dim=20, label_dim=10):
+        super().__init__()
+        assert input_dim >= 784, "This encoder is for 28x28 images"
+        self.latent_dim = latent_dim
+        self.label_dim = label_dim
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, 4, 2, 1), nn.GELU(),   # 28->14
+            nn.Conv2d(32, 64, 4, 2, 1), nn.GELU(),  # 14->7
+        )
+        self.fc = nn.Linear(64 * 7 * 7 + self.label_dim, 2 * latent_dim)
+
+    def encode(self, x, y=None):
+        B = x.size(0)
+        x_img = x.view(B, 1, 28, 28)
+        h = self.conv(x_img).view(B, -1)
+        if y is not None:
+            h = torch.cat([h, y], dim=1)
+        h = self.fc(h)
+        mu, logvar = torch.split(h, self.latent_dim, dim=1)
+        return mu, logvar
+
+
+class ConvDecoder2D(nn.Module):
+    """decode(z,y) -> logits flat (B,784)"""
+
+    def __init__(self, latent_dim, output_dim=784):
+        super().__init__()
+        assert output_dim == 784, "This decoder is for 28x28 images"
+        self.output_dim = output_dim
+        self.latent_dim = latent_dim
+
+        self.fc = nn.Linear(latent_dim, 64 * 7 * 7)
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, 4, 2, 1), nn.GELU(),  # 7->14
+            nn.ConvTranspose2d(32, 1, 4, 2, 1),              # 14->28
+            # logits out
+        )
+
+    def decode(self, z, y=None):
+        h = z if y is None else torch.cat([z, y], dim=1)
+        h = self.fc(h)
+        h = h.view(z.size(0), 64, 7, 7)
+        logits = self.deconv(h)                 # (B,1,28,28)
+        return logits.view(z.size(0), self.output_dim)      # flat logits
+
+
 class CVAE(nn.Module):
-    def __init__(self, input_dim=784, label_dim=10, latent_dim=20, name=""):
+    def __init__(self, input_dim=784, label_dim=10, latent_dim=20, name="", arch="base"):
         super(CVAE, self).__init__()
         self.name = name
         self.latent_dim = latent_dim
         self.label_dim = label_dim
-
-        self.encoder = Encoder(input_dim+label_dim,
-                               hidden_dim=400, latent_dim=latent_dim)
-        self.decoder = Decoder(latent_dim+label_dim,
-                               hidden_dim=400, output_dim=input_dim)
+        self.arch = arch
+        if arch == "base":
+            self.encoder = Encoder(input_dim=input_dim+label_dim,
+                                   hidden_dim=400, latent_dim=latent_dim)
+            self.decoder = Decoder(latent_dim=latent_dim+label_dim,
+                                   hidden_dim=400, output_dim=input_dim)
+        elif arch == "mlp":
+            self.encoder = MLPEncoder(input_dim=input_dim+label_dim,
+                                      hidden_dim=512, latent_dim=latent_dim)
+            self.decoder = MLPDecoder(latent_dim=latent_dim+label_dim,
+                                      hidden_dim=512, output_dim=input_dim)
+        elif arch == "conv":
+            self.encoder = ConvEncoder2D(input_dim=input_dim+label_dim,
+                                         latent_dim=latent_dim, label_dim=label_dim)
+            self.decoder = ConvDecoder2D(latent_dim=latent_dim+label_dim,
+                                         output_dim=input_dim)
+        else:
+            raise ValueError(f"Invalid architecture: {arch}")
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -103,8 +197,9 @@ class CVAE(nn.Module):
 
         # Generate samples
         logits = self.decoder.decode(z, y_onehot)
+        prob = torch.sigmoid(logits)
 
-        return torch.sigmoid(logits)
+        return torch.bernoulli(prob)
 
     def get_name(self):
         return self.name
@@ -179,6 +274,7 @@ class SyntheticDiscriminator(nn.Module):
             - 'total_predictions': total number of predictions
         """
         # Forward pass (x is already flattened)
+        x = (x > 0.5).float()
         logits = self.forward(x)  # [batch_size, 1]
 
         # Debug: print shapes to understand the issue
