@@ -1,12 +1,10 @@
 # Conditional VAE  
 
-<!-- 
-#### MNIST Data
+## MNIST Data
 Model 0: Train CVAE with 5000 real samples.  
 Discriminator: Train the discriminator with 60,000 real samples and 60,000 synthetic samples.  
 Model 1 with filtered data: generate 700,000 synthetic samples. Each digit select top 1.5%. 10,500 data remains, using it to train.  
 Model 1 without filtering: generate 10,500 data and train.  
--->
 
 ## Visualize
 
