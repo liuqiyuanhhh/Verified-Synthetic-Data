@@ -551,7 +551,6 @@ def generate_images_with_filtering(
 def generate_balanced_images_with_filtering(
     model: torch.nn.Module,
     save_directory: str,
-    model_name: str,
     total_samples: int,
     batch_size: int = 60000,
     discriminator: Optional[torch.nn.Module] = None,
@@ -568,8 +567,7 @@ def generate_balanced_images_with_filtering(
 
     Args:
         model: Trained CVAE model for generating images
-        save_directory: Directory to save .pt files
-        model_name: Name of the model for file naming
+        save_directory: Directory to save .pt files        
         total_samples: Total number of samples to generate (must be divisible by 10)
         batch_size: Batch size for saving files (must be divisible by 10)
         discriminator: Optional discriminator for filtering (if None, no filtering)
@@ -601,7 +599,6 @@ def generate_balanced_images_with_filtering(
             "selection_threshold must be between 0 and 1 when use_quantile_filtering=True")
 
     # Create save directory
-    save_directory = os.path.join(save_directory, model_name)
     os.makedirs(save_directory, exist_ok=True)
 
     # Remove any existing .pt files in the directory
@@ -722,11 +719,11 @@ def generate_balanced_images_with_filtering(
         # Save batch to disk
         if discriminator:
             if use_quantile_filtering:
-                batch_filename = f"{model_name}_{len(batch_images)}_q{selection_threshold}_b{batch_idx}.pt"
+                batch_filename = f"{len(batch_images)}_q{selection_threshold}_b{batch_idx}.pt"
             else:
-                batch_filename = f"{model_name}_{len(batch_images)}_t{selection_threshold}_b{batch_idx}.pt"
+                batch_filename = f"{len(batch_images)}_t{selection_threshold}_b{batch_idx}.pt"
         else:
-            batch_filename = f"{model_name}_{len(batch_images)}_b{batch_idx}.pt"
+            batch_filename = f"{len(batch_images)}_b{batch_idx}.pt"
 
         batch_path = os.path.join(save_directory, batch_filename)
 
@@ -843,7 +840,7 @@ def generate_balanced_synthetic_data(synthetic_model, target_size, device=None):
         synthetic_images = synthetic_images[:target_size]
         synthetic_labels = synthetic_labels[:target_size]
 
-    print(f"Generated synthetic dataset size: {len(synthetic_images)}")
+    # print(f"Generated synthetic dataset size: {len(synthetic_images)}")
 
     return synthetic_images, synthetic_labels
 
@@ -900,3 +897,239 @@ def prepare_discriminator_dataset(real_dataset, synthetic_model, device=None):
 
     # Return simple TensorDataset - DataLoader will handle shuffling
     return torch.utils.data.TensorDataset(X_all, y_all)
+
+
+# ---------- small in-RAM k-center for pruning/finalization ----------
+def kcenter_in_memory(embeddings: torch.Tensor, k: int) -> torch.Tensor:
+    """
+    embeddings: (N, d) CPU or GPU tensor of embeddings
+    k: number to select
+    returns: (k,) LongTensor of selected indices (w.r.t. embeddings)
+    """
+    input_device = embeddings.device
+    N = embeddings.size(0)
+
+    if k >= N:
+        return torch.arange(N, device=input_device)
+
+    # Move to GPU for computation if not already there
+    if embeddings.device.type == 'cpu' and torch.cuda.is_available():
+        embeddings_gpu = embeddings.to('cuda')
+        device = 'cuda'
+    else:
+        embeddings_gpu = embeddings
+        device = embeddings.device
+
+    # start with a random point
+    idx = [torch.randint(N, (), device=device).item()]
+    dist = torch.cdist(embeddings_gpu[idx], embeddings_gpu).squeeze(0)  # (N,)
+
+    for _ in range(1, k):
+        far = torch.argmax(dist).item()
+        idx.append(far)
+        dist = torch.minimum(dist, torch.cdist(
+            embeddings_gpu[[far]], embeddings_gpu).squeeze(0))
+
+    # Convert final indices to input device
+    return torch.tensor(idx, device=input_device, dtype=torch.long)
+
+# ---------- incremental streaming coreset across shard files ----------
+
+
+@torch.no_grad()
+def incremental_coreset_across_files(
+    directory_path: str,
+    output_path: str,              # path to save selected images and labels
+    embed_fn,                      # callable (x_flat, y_int) -> (B,d)
+    K_final: int,                  # final number to select
+    pct_per_file: float = 1.0,     # percentage of samples to take per file before pruning
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    verbose: bool = True            # whether to print progress information
+):
+    """
+    Streaming k-center algorithm that processes files sequentially.
+
+    Args:
+        directory_path: Path to directory containing .pt files
+        output_path: Path to save the selected images and labels
+        embed_fn: Function that takes (x_flat, y_int) and returns embeddings (B,d)
+        K_final: Final number of samples to select
+        pct_per_file: Percentage of samples to select from each file
+        device: Device to use for computations
+        verbose: Whether to print progress information
+
+    Returns:
+        None (saves results to output_path)
+    """
+
+    pattern = os.path.join(directory_path, "*.pt")
+    pt_files = glob.glob(pattern)
+    pt_files.sort()
+
+    # Global coreset: stores embeddings and metadata per digit
+    # Dictionary with digit as key, each value contains:
+    # - 'embeddings': list of (d,) CPU tensors
+    # - 'images': list of CPU tensors
+    # - 'labels': list of CPU tensors
+    coreset_by_digit = {digit: {'embeddings': [],
+                                'images': [], 'labels': []} for digit in range(10)}
+
+    if verbose:
+        print(
+            f"Processing {len(pt_files)} files for incremental k-center selection...")
+
+    # Process each file
+    for file_idx, file_path in enumerate(pt_files):
+        if verbose:
+            print(
+                f"Processing file {file_idx + 1}/{len(pt_files)}: {os.path.basename(file_path)}")
+
+        # Load file data
+        data = torch.load(file_path, map_location="cpu")
+        images = data["images"]  # (N, 784) or (N, 1, 28, 28)
+        labels = data["labels"]  # (N,)
+
+        # Process each digit separately
+        for digit in range(10):
+            # Get mask for current digit
+            mask = (labels == digit)
+            digit_images = images[mask]
+            digit_labels = labels[mask]
+
+            if len(digit_images) == 0:
+                continue  # Skip if no samples for this digit
+
+            # Calculate how many samples to select for this digit in this file
+            n_samples_digit = len(digit_images)
+            m = max(1, int(n_samples_digit * pct_per_file))
+
+            # Move to device for embedding computation
+            Xd = digit_images.to(device).float()
+            Yd = digit_labels.to(device)
+
+            # Get embeddings for current digit batch
+            # (M, d) where M = n_samples_digit
+            embeddings_this_batch = embed_fn(Xd, Yd).detach()
+
+            # --- initialize per-point min distance to current coreset for this digit ---
+            dmin = torch.full((n_samples_digit,), float(
+                "inf"), device=device)  # (M,)
+
+            # --- greedy farthest-first within this file (exact k-center logic) ---
+            selected_local = []
+
+            if len(coreset_by_digit[digit]['embeddings']) > 0:
+                # Coreset exists: compute distances to existing centers
+                coreset_dev = torch.stack(coreset_by_digit[digit]['embeddings'], 0).to(
+                    device)  # (|coreset|, d)
+                # distance to nearest existing center in coreset for this digit
+                dmin = torch.cdist(embeddings_this_batch, coreset_dev).min(
+                    dim=1).values  # (M,)
+            else:
+                # Coreset is empty: seed with a random point from this file
+                seed = torch.randint(n_samples_digit, (), device=device).item()
+                selected_local.append(seed)
+                coreset_by_digit[digit]['embeddings'].append(
+                    embeddings_this_batch[seed].detach().cpu())
+                coreset_by_digit[digit]['images'].append(digit_images[seed])
+                coreset_by_digit[digit]['labels'].append(digit_labels[seed])
+
+                d_seed = torch.cdist(
+                    # (M,)
+                    embeddings_this_batch, embeddings_this_batch[seed:seed+1]).squeeze(1)
+                dmin = torch.minimum(dmin, d_seed)
+                dmin[seed] = -1.0  # mark selected so it won't be chosen again
+
+            while len(selected_local) < min(m, n_samples_digit):
+                far = int(torch.argmax(dmin).item())  # farthest point
+                selected_local.append(far)
+
+                # --- append chosen embedding and data to global coreset for this digit ---
+                coreset_by_digit[digit]['embeddings'].append(
+                    embeddings_this_batch[far].detach().cpu())
+                coreset_by_digit[digit]['images'].append(digit_images[far])
+                coreset_by_digit[digit]['labels'].append(digit_labels[far])
+
+                # update dmin using ONLY the new center (just like the canonical code)
+                d_new = torch.cdist(
+                    # (M,)
+                    embeddings_this_batch, embeddings_this_batch[far:far+1]).squeeze(1)
+                dmin = torch.minimum(dmin, d_new)
+                dmin[far] = -1.0  # prevent re-selection
+
+            if verbose:
+                print(
+                    f"  Digit {digit}: selected {len(selected_local)}/{n_samples_digit} samples, coreset size: {len(coreset_by_digit[digit]['embeddings'])}")
+
+    # Final balanced selection: select K_final/10 samples from each digit
+    K_final_per_digit = K_final // 10
+    if verbose:
+        print(
+            f"\nRunning final balanced k-center selection: {K_final_per_digit} samples per digit...")
+
+    final_images = []
+    final_labels = []
+
+    for digit in range(10):
+        if len(coreset_by_digit[digit]['embeddings']) == 0:
+            if verbose:
+                print(f"  Digit {digit}: No samples available, skipping")
+            continue
+
+        digit_coreset_size = len(coreset_by_digit[digit]['embeddings'])
+
+        if K_final_per_digit >= digit_coreset_size:
+            # Take all samples for this digit
+            if verbose:
+                print(
+                    f"  Digit {digit}: Taking all {digit_coreset_size} samples")
+            digit_final_indices = torch.arange(digit_coreset_size)
+        else:
+            # Run k-center selection for this digit
+            if verbose:
+                print(
+                    f"  Digit {digit}: Selecting {K_final_per_digit}/{digit_coreset_size} samples")
+            # Stack embeddings list into a tensor
+            digit_embeddings = torch.stack(
+                coreset_by_digit[digit]['embeddings'], 0)
+            digit_final_indices = kcenter_in_memory(
+                digit_embeddings, K_final_per_digit)
+
+        # Get selected samples for this digit
+        digit_final_images = [coreset_by_digit[digit]
+                              ['images'][i] for i in digit_final_indices]
+        digit_final_labels = [coreset_by_digit[digit]
+                              ['labels'][i] for i in digit_final_indices]
+
+        final_images.extend(digit_final_images)
+        final_labels.extend(digit_final_labels)
+
+    # Convert to tensors
+    final_images = torch.stack(final_images)
+    final_labels = torch.stack(final_labels)
+
+    # Shuffle the final selection
+    shuffle_indices = torch.randperm(len(final_images))
+    final_images = final_images[shuffle_indices]
+    final_labels = final_labels[shuffle_indices]
+
+    # Save to output path
+    output_path = os.path.join(output_path, f"coreset_{K_final}.pt")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    torch.save({
+        "images": final_images,
+        "labels": final_labels
+    }, output_path)
+
+    print(f"Saved selected samples after k-center to: {output_path}")
+
+# ---------- helper: embed with your CVAE μ(x|y) ----------
+
+
+def make_embed_mu_from_cvae(cvae):
+    def _embed(x_flat, y_int):
+        y_oh = F.one_hot(y_int.long(), num_classes=cvae.label_dim).float().to(
+            x_flat.device)
+        mu, _ = cvae.encoder.encode(x_flat, y_oh)
+        return mu
+    return _embed
