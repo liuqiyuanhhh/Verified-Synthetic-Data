@@ -1,6 +1,5 @@
 # Conditional VAE  
 
-
 ## Experiment Setup
 
 - **Model 0**: A CVAE trained on 5,000 real MNIST samples.  
