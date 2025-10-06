@@ -1,358 +1,303 @@
 import sys
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 import torch
+from torch import nn
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, Subset
 from torchvision.utils import make_grid
+import torch.nn.functional as F
+import os
+import argparse
+
+import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import os
+import random
 
-sample_size = int(sys.argv[1])
-filter_threshold = float(sys.argv[2])
+vae_path = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae"
+sys.path.append(vae_path)
 
-############################ real data training ############################
-sys.path.append("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")
+import models as models
+import train_helper as train_helper
+import utils as utils
+import data_helper as data_helper
 
-import torch.nn.functional as F
-from cvae_model import CVAE, cvae_loss
-from torch.utils.data import Subset
+parser = argparse.ArgumentParser()
+parser.add_argument("--fixed-size", type=int, default=int(os.getenv("FIXED_SIZE", "5000")))
+args = parser.parse_args()
+FIXED = int(args.fixed_size) 
 
-# Set device
+# Set up device and seed
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+base_seed = 0
+torch.manual_seed(base_seed)
+torch.cuda.manual_seed_all(base_seed)
+np.random.seed(base_seed)
+random.seed(base_seed)
 
-# Hyperparameters
-latent_dim = 20
-label_dim = 10
-batch_size = 128
-epochs = 200
-lr = 1e-3
-# Load MNIST
-transform = transforms.ToTensor()
-full_dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
-train_dataset = Subset(full_dataset, range(sample_size))
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+ROOT = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/one_strong_vae_appendix"
+model_saved_path = os.path.join(ROOT,"model_saved_more")
+data_saved_path = os.path.join(ROOT,"data_saved_more")
+results_saved_path = os.path.join(ROOT,"results_saved_more")
+picture_saved_path = os.path.join(ROOT,"picture_saved_more")
+os.makedirs(results_saved_path, exist_ok=True)
+#################  size schedule #################
 
-# Initialize model
-model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+#start = 10_000
+#end = 256_000
+#k = 40 
+#/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/model_saved_full_dataset/full_dataset_model.pth
+#size_schedule = ((np.linspace(start, end, k) / 10).round().astype(int) * 10).tolist()
 
-# One-hot encoding helper
-def one_hot(labels, num_classes=10):
-    return F.one_hot(labels, num_classes).float()
+start = 30000
+end = 1000000
+k = 20
+size_schedule = ((np.linspace(start, end, k) / 10).round().astype(int) * 10).tolist()
+#size_schedule = (np.arange(k) * step + start).tolist()
 
-best_train_loss = float('inf')
-patience = 5
-trigger_times = 0
+#k = 40
+#size_schedule = [20_000] * k
+################### real ############################
+full_dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transforms.ToTensor())
 
-for epoch in range(epochs):
-    model.train()
-    total_loss = 0
+test_dataset = datasets.MNIST(root="./data", train=False, download=True,transform=transforms.ToTensor())
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+full_digit_indices = utils.create_balanced_subset_indices(full_dataset,seed=base_seed)
 
-    for x, y in train_loader:
-        x = x.view(-1, 784).to(device)
-        y = one_hot(y).to(device)
+#train_dataset_5000 = Subset(full_dataset, range(5000))
+import torch
+import torch.nn.functional as F
 
-        optimizer.zero_grad()
-        recon_x, mu, logvar = model(x, y)
-        loss = cvae_loss(recon_x, x, mu, logvar)
-        loss.backward()
-        optimizer.step()
+def append_result(csv_path, model_name, val_loss, val_recon, val_kl, fid_score):
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    row = pd.DataFrame([{
+        "model_name": model_name,
+        "val_loss": float(val_loss),
+        "val_recon": float(val_recon),
+        "val_kl": float(val_kl),
+        "fid": float(fid_score),
+    }])
+    header_needed = not os.path.exists(csv_path)  # only first write has header
+    row.to_csv(csv_path, mode="a", header=header_needed, index=False)
 
-        total_loss += loss.item()
 
-    avg_loss = total_loss / len(train_loader.dataset)
-    print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}")
-
-    # Early stopping based on training loss
-    if avg_loss < best_train_loss:
-        best_train_loss = avg_loss
-        trigger_times = 0
-    else:
-        trigger_times += 1
-        print(f"EarlyStopping counter: {trigger_times} out of {patience}")
-        if trigger_times >= patience:
-            print("Early stopping triggered.")
-            break
-os.chdir("/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST")  
-# save the model to model_saved folder
-torch.save(model.state_dict(), f"model_saved/cvae_mnist_{sample_size}.pth")
-print(f"Model saved to model_saved/cvae_mnist_{sample_size}.pth")
-
-############################ generate synthetic data ############################
-
-model = CVAE(latent_dim=latent_dim, label_dim=label_dim)
-model.load_state_dict(torch.load(f"model_saved/cvae_mnist_{sample_size}.pth"))
-model.eval()
-
+@torch.no_grad()
 def generate_images_in_batches(model, total_samples, latent_dim, num_classes, batch_size=10000, device='cuda'):
     model.eval()
     generated_images = []
     all_labels = []
 
+    # Balanced label assignment (always length = total_samples)
+    labels_full = torch.arange(total_samples) % num_classes
+
     for start in range(0, total_samples, batch_size):
         end = min(start + batch_size, total_samples)
-        batch_size_actual = end - start
+        n = end - start
 
-        # Generate z and y
-        z = torch.randn(batch_size_actual, latent_dim).to(device)
-        y = torch.arange(num_classes).repeat_interleave(total_samples // num_classes)[start:end]
+        # Sample latent z
+        z = torch.randn(n, latent_dim, device=device)
+
+        # Labels
+        y = labels_full[start:end]
         y_onehot = F.one_hot(y, num_classes=num_classes).float().to(device)
 
-        with torch.no_grad():
-            imgs = model.decode(z, y_onehot).view(-1, 1, 28, 28).cpu()
-            generated_images.append(imgs)
-            all_labels.append(y)
+        # Decode logits → sigmoid → [0,1]
+        logits_flat = model.decoder.decode(z, y_onehot)     # (n, 784), logits
+        imgs = torch.sigmoid(logits_flat).view(-1, 1, 28, 28).cpu()
+
+        generated_images.append(imgs)
+        all_labels.append(y)
 
     images = torch.cat(generated_images, dim=0)
     labels = torch.cat(all_labels, dim=0)
     return images, labels
 
-# large sample size for training
-latent_dim = model.latent_dim
-device = next(model.parameters()).device
-gen_imgs_before_filter,y_before_filter = generate_images_in_batches(
-    model=model,
-    total_samples=6000000,
-    latent_dim=latent_dim,
-    num_classes=10,
-    batch_size=10000,
-    device=device
-)
-
-#save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}.pt"
-#torch.save({
-#    'images': gen_imgs,    # Tensor [6000000, 1, 28, 28]
-#    'labels': y            # Tensor [6000000]
-#}, save_path)
-
-# smaller sample size for evaluation
-gen_imgs,y = generate_images_in_batches(
-    model=model,
-    total_samples=6000,
-    latent_dim=latent_dim,
-    num_classes=10,
-    batch_size=10000,
-    device=device
-)
-
-save_path = f"data_saved/synthetic_mnist_cvae_{sample_size}_2.pt"
-torch.save({
-    'images': gen_imgs,    # Tensor [6000, 1, 28, 28]
-    'labels': y            # Tensor [6000]
-}, save_path)
-
-############################ filter synthetic data ############################
-
-from discriminator import Discriminator
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-D = Discriminator().to(device)
-D.load_state_dict(torch.load("model_saved/discriminator_mnist_cvae_2.pth"))
-D.eval()
-
-#data = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}.pt")
-#synthetic_images = data['images']  
-
-synthetic_loader = DataLoader(gen_imgs_before_filter, batch_size=512)
-
-all_probs = []
-
-with torch.no_grad():
-    for batch in synthetic_loader:
-        batch = batch.to(device)
-        probs = D(batch)  # [batch_size, 1], already sigmoid activated
-        all_probs.append(probs.cpu())
-
-all_probs = torch.cat(all_probs, dim=0)
-# Flatten probs to shape [N]
-probs = all_probs.squeeze(1)
-
-# Load images and labels
-images = gen_imgs_before_filter#data['images']      # [N, 1, 28, 28]
-labels = y_before_filter #data['labels']      # [N]
-# Create mask for p > filter_threshold
-mask = probs > filter_threshold
-
-# Apply mask
-filtered_images = images[mask]
-filtered_labels = labels[mask]
-
-print(f"Selected {filtered_images.shape[0]} samples with p > {filter_threshold}")
-# Save to file
-torch.save({
-    'images': filtered_images,
-    'labels': filtered_labels
-}, f"data_saved/synthetic_mnist_filtered_pgt{filter_threshold}_{sample_size}.pt")
-
-
-############################ synthetic data retraining ############################
-
-from torch.utils.data import TensorDataset
-
-images = filtered_images  # shape: [N, 1, 28, 28]
-labels = filtered_labels  # shape: [N]
-
-print(f"Loaded {images.shape[0]} filtered synthetic samples")
-
-# Preprocess: flatten images and convert labels to one-hot
-images = images.view(-1, 784)  # flatten to [N, 784]
-
-# Create dataset and dataloader
-dataset = TensorDataset(images, labels)
-train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-# Initialize model
-model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
-best_train_loss = float('inf')
-for epoch in range(epochs):
-    model.train()
-    total_loss = 0
-
-    for x, y in train_loader:
-        x = x.view(-1, 784).to(device)
-        y = one_hot(y).to(device)
-
-        optimizer.zero_grad()
-        recon_x, mu, logvar = model(x, y)
-        loss = cvae_loss(recon_x, x, mu, logvar)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-
-    avg_loss = total_loss / len(train_loader.dataset)
-    print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}")
-
-    # Early stopping based on training loss
-    if avg_loss < best_train_loss:
-        best_train_loss = avg_loss
-        trigger_times = 0
-    else:
-        trigger_times += 1
-        print(f"EarlyStopping counter: {trigger_times} out of {patience}")
-        if trigger_times >= patience:
-            print("Early stopping triggered.")
-            break
-
-# save the model to model_saved folder
-torch.save(model.state_dict(), f"model_saved/cvae_mnist_filtered_synthetic_data_{sample_size}.pth")
-
-# use the new model to generate synthetic data for evaluation
-model.eval()
-
-n_per_class = 60000
-num_classes = 10
-total_samples = n_per_class * num_classes
-latent_dim = model.latent_dim
-device = next(model.parameters()).device
-
-z = torch.randn(total_samples, latent_dim).to(device)
-y = torch.arange(num_classes).repeat_interleave(n_per_class)
-y_onehot = F.one_hot(y, num_classes=num_classes).float().to(device)
-
-with torch.no_grad():
-    gen_imgs = model.decode(z, y_onehot).view(-1, 1, 28, 28).cpu()  # shape: [60000, 1, 28, 28]
-
-# save the generated images and labels
-save_path = f"data_saved/synthetic_mnist_cvae_filtered_synthetic_model_generated_data_{sample_size}.pt"
-torch.save({"images": gen_imgs, "labels": y}, save_path)
-
-############################ Model Evaluation ############################
-
-# FID
 from FID import calculate_fid_score
 
-transform = transforms.ToTensor()
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
-real_ds = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-### Synthetic dataset
-synthetic = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}_2.pt")
-synthetic_ds = TensorDataset(synthetic['images'], torch.zeros(len(synthetic['images'])))
-fid_value = calculate_fid_score(real_ds, synthetic_ds)
-print(f"FID Score(real data and synthetic data): {fid_value:.2f}")
+@torch.no_grad()
+def plot_model_samples(model, save_path=None, latent_dim=20, num_classes=10, per_class=8, device=None):
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
 
-## filtered synthetic data
-synthetic = torch.load(f"data_saved/synthetic_mnist_filtered_pgt{filter_threshold}_{sample_size}.pt")
-synthetic_ds = TensorDataset(synthetic['images'], torch.zeros(len(synthetic['images'])))
-fid_value = calculate_fid_score(real_ds, synthetic_ds)
-print(f"FID Score(real data and filtered synthetic data): {fid_value:.2f}")
+    # latent + labels
+    z = torch.randn(num_classes * per_class, latent_dim, device=device)
+    y = torch.arange(num_classes, device=device).repeat_interleave(per_class)
+    y_onehot = F.one_hot(y, num_classes=num_classes).float().to(device)
 
-# Synthetic dataset
-synthetic = torch.load(f"data_saved/synthetic_mnist_cvae_filtered_synthetic_model_generated_data_{sample_size}.pt")
-synthetic_ds = TensorDataset(synthetic['images'], torch.zeros(len(synthetic['images'])))
-fid_value = calculate_fid_score(real_ds, synthetic_ds)
-print(f"FID Score(real data and model 2 synthetic data): {fid_value:.2f}")
+    # decode -> logits, then map to [0,1]
+    logits_flat = model.decoder.decode(z, y_onehot)            # (n, 784), logits
+    imgs = torch.sigmoid(logits_flat).view(-1, 1, 28, 28)      # tensor on device, no grad (due to @no_grad)
 
-# Reconstruction Loss
+    # move for plotting
+    imgs_np = imgs.detach().cpu().numpy()
 
-# Load model
-model = CVAE(latent_dim=20, label_dim=10).to(device)
-model.load_state_dict(torch.load(f"model_saved/cvae_mnist_{sample_size}.pth"))
-model.eval()
+    fig, axes = plt.subplots(num_classes, per_class, figsize=(2*per_class, 2*num_classes))
+    for c in range(num_classes):
+        for j in range(per_class):
+            idx = c * per_class + j
+            axes[c, j].imshow(imgs_np[idx].squeeze(), cmap='gray')
+            axes[c, j].axis('off')
+            if j == 0:
+                axes[c, j].set_ylabel(f"Class {c}", fontsize=10)
 
-# Load test set
-test_dataset = datasets.MNIST(root="./data", train=False, transform=transforms.ToTensor())
-test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    plt.tight_layout()
+    if save_path:
+        if not os.path.exists(os.path.dirname(save_path)):
+            os.makedirs(os.path.dirname(save_path))
+        plt.savefig(save_path, dpi=150)
+        print(f"[SAVE] Sample grid saved -> {save_path}")
+    return fig, axes
 
-# Evaluation
-total_loss = 0
-total_recon_loss = 0
-total_kl = 0
-num_samples = 0
 
-with torch.no_grad():
-    for x, y in test_loader:
-        x = x.view(-1, 784).to(device)
-        y = F.one_hot(y, num_classes=10).float().to(device)
+def fid(model):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
-        recon_x, mu, logvar = model(x, y)
-        BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        loss = BCE + KLD
+    synthetic_gen_size = 6000
+    gen_imgs_before_filter,y_before_filter = generate_images_in_batches(
+        model=model,
+        total_samples=synthetic_gen_size,
+        latent_dim=20,
+        num_classes=10,
+        batch_size=10000,
+        device=device
+    )
+    # Load synthetic data
+    #synthetic = torch.load(f"data_saved/synthetic_mnist_cvae_{sample_size}_2.pt")
+    images = gen_imgs_before_filter # [N, 1, 28, 28]
+    labels = y_before_filter  # [N]
 
-        total_loss += loss.item()
-        total_recon_loss += BCE.item()
-        total_kl += KLD.item()
-        num_samples += x.size(0)
+    transform = transforms.ToTensor()
 
-print(f"Test Set Results(model1):")
-print(f"  Avg CVAE Loss: {total_loss / num_samples:.4f}")
-print(f"  Avg Reconstruction (BCE) Loss: {total_recon_loss / num_samples:.4f}")
-print(f"  Avg KL Divergence: {total_kl / num_samples:.4f}")
+    real_ds = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    synthetic_ds = TensorDataset(images, labels)
+    
+    synthetic_ds = TensorDataset(images, labels)
+    fid = calculate_fid_score(real_ds, synthetic_ds)
+    
+    return fid
 
-# get the loss of synthetic model
+import shutil
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = CVAE(latent_dim=latent_dim, label_dim=label_dim).to(device)
-model.load_state_dict(torch.load(f"model_saved/cvae_mnist_filtered_synthetic_data_{sample_size}.pth"))
-model.eval()
+init_size = 500
 
-# Load test set
-test_dataset = datasets.MNIST(root="./data", train=False, transform=transforms.ToTensor())
-test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+all_models = []
+test_results = {"val_loss":[], "val_recon":[], "val_kl":[], "fid":[],"model_name":[]}
 
-# Evaluation
-total_loss = 0
-total_recon_loss = 0
-total_kl = 0
-num_samples = 0
+# Seed real subset & train initial model
+init_subset = utils.get_balanced_subset(full_digit_indices, init_size)
+init_dataset = Subset(full_dataset, init_subset)
+init_loader = DataLoader(init_dataset, batch_size=128, shuffle=True)
 
-with torch.no_grad():
-    for x, y in test_loader:
-        x = x.view(-1, 784).to(device)
-        y = F.one_hot(y, num_classes=10).float().to(device)
+this_model = models.CVAE(input_dim=784, label_dim=10, latent_dim=20,
+                         name=f"cvae_conv_real_{init_size}", arch="conv").to(device)
+train_helper.train_model(this_model, init_loader, device, epochs=200, lr=1e-3, patience=5, verbose=False)
+plot_model_samples(this_model, save_path=os.path.join(picture_saved_path,f"initial_model_samples_{init_size}.png"), device=device)
+val_loss, val_recon, val_kl = train_helper.calculate_validation_loss(this_model, test_loader, device)
+fid_score = fid(this_model)
+test_results["val_loss"].append(val_loss)
+test_results["val_recon"].append(val_recon)
+test_results["val_kl"].append(val_kl)
+test_results["fid"].append(fid_score)
+test_results["model_name"].append(this_model.name)
+print(f"Init loss: {init_size} - Val Loss: {val_loss:.4f} - Val KL: {val_kl:.4f} - Val Recon: {val_recon:.4f}")
+all_models.append(this_model)
 
-        recon_x, mu, logvar = model(x, y)
-        BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        loss = BCE + KLD
+utils.save_model(this_model, this_model.get_name(), model_saved_path)
 
-        total_loss += loss.item()
-        total_recon_loss += BCE.item()
-        total_kl += KLD.item()
-        num_samples += x.size(0)
+csv_path = os.path.join(results_saved_path, f"results_table_{init_size}_{k}rounds.csv")
+append_result(csv_path, this_model.get_name() if hasattr(this_model, "get_name") else this_model.name,
+              val_loss, val_recon, val_kl, fid_score)
 
-print(f"Test Set Results(model2):")
-print(f"  Avg CVAE Loss: {total_loss / num_samples:.4f}")
-print(f"  Avg Reconstruction (BCE) Loss: {total_recon_loss / num_samples:.4f}")
-print(f"  Avg KL Divergence: {total_kl / num_samples:.4f}")
+# ----- k-round synthetic retraining -----                   # <-- number of retraining rounds
+threshold = 0.1           # discriminator selection threshold
+#synthetic_size = 200_000         # list of synthetic attempt sizes to run per round
+#SIZE_START = 50_000
+#SIZE_END   = 400_000
+
+#def round_to_multiple(n, m=10):
+#    return int(n // m * m)
+
+# Linear schedule: 50k -> 200k over k rounds
+#size_schedule = np.linspace(SIZE_START, SIZE_END, k).astype(int)
+#size_schedule = np.array([round_to_multiple(s, 10) for s in size_schedule])
+
+
+################### full dataset trained discriminator ############################
+full_real_model = models.CVAE(input_dim=784, label_dim=10, latent_dim=20, arch="conv").to(device)
+model_saved_path1 = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/model_saved_full_dataset/"
+ckpt_path = os.path.join(model_saved_path1, "full_dataset_model.pth")
+full_real_model.load_state_dict(torch.load(ckpt_path, map_location=device))
+discriminator_dataset = data_helper.prepare_discriminator_dataset(full_dataset, full_real_model, device)
+disc_loader = DataLoader(discriminator_dataset, batch_size=128, shuffle=True)
+disc_model = models.SyntheticDiscriminator(input_dim=784).to(device)
+train_helper.train_model(model=disc_model, train_loader=disc_loader, device=device,
+                            epochs=80, lr=1e-3, patience=5, verbose=False)
+del disc_loader, discriminator_dataset
+#####################################################################################
+
+curr_model = this_model
+for round_id in range(1, k + 1):
+    synthetic_size = int(size_schedule[round_id - 1])
+    # (A) Train a fresh discriminator for the CURRENT generator
+    print(f"\n[Round {round_id}] Training discriminator for current model...")
+    #discriminator_dataset = data_helper.prepare_discriminator_dataset(full_dataset, curr_model, device)
+    #disc_loader = DataLoader(discriminator_dataset, batch_size=128, shuffle=True)
+    #disc_model = models.SyntheticDiscriminator(input_dim=784).to(device)
+    #train_helper.train_model(model=disc_model, train_loader=disc_loader, device=device,
+    #                         epochs=80, lr=1e-3, patience=5, verbose=False)
+    #del disc_loader, discriminator_dataset
+    # (B) Generate filtered synthetic dataset to a TEMP dir (unique per round)
+    model_name = f'cvae_conv_init{init_size}_q{threshold}_s{synthetic_size}_r{round_id}'
+    synthetic_data_load_path = os.path.join(data_saved_path, model_name)
+
+    print(f"[Round {round_id}] Generating filtered synthetic data -> {synthetic_data_load_path}")
+    data_helper.generate_balanced_images_with_filtering(
+        model=curr_model,
+        save_directory=synthetic_data_load_path,
+        total_samples=synthetic_size,
+        discriminator=disc_model,
+        selection_threshold=threshold,
+        verbose=False,
+        use_quantile_filtering=True
+    )
+
+    synthetic_loader = data_helper.create_directory_based_dataloader(synthetic_data_load_path, batch_size=128)
+    synthetic_model = models.CVAE(input_dim=784, label_dim=10, latent_dim=20,
+                                    name=model_name, arch="conv").to(device)
+    train_helper.train_model(synthetic_model, synthetic_loader, device,
+                                epochs=200, lr=1e-3, patience=5, verbose=False)
+    plot_model_samples(synthetic_model, save_path=os.path.join(picture_saved_path,f"round{round_id}_model_samples.png"), device=device)
+    val_loss, val_recon, val_kl = train_helper.calculate_validation_loss(synthetic_model, test_loader, device)
+    fid_score = fid(synthetic_model)
+    test_results["val_loss"].append(val_loss)
+    test_results["val_recon"].append(val_recon)
+    test_results["val_kl"].append(val_kl)
+    test_results["model_name"].append(synthetic_model.get_name())
+    test_results["fid"].append(fid_score)
+    print(f"[Round {round_id}] Model: {model_name} | Val Loss: {val_loss:.4f} | KL: {val_kl:.4f} | Recon: {val_recon:.4f} | FID: {fid_score:.4f}")
+
+    utils.save_model(synthetic_model, synthetic_model.get_name(), model_saved_path)
+    all_models.append(synthetic_model)
+    append_result(csv_path, synthetic_model.get_name(),
+              val_loss, val_recon, val_kl, fid_score)
+
+    # (D) Advance the chain
+    curr_model = synthetic_model
+
+    # (E) Cleanup temp dir
+    del synthetic_loader
+    try:
+        if os.path.exists(synthetic_data_load_path):
+            shutil.rmtree(synthetic_data_load_path)
+            print(f"[CLEAN] Removed temp dir: {synthetic_data_load_path}")
+    except Exception as e:
+        print(f"[WARN] Failed to remove {synthetic_data_load_path}: {e}")
+
+    # Optional: free GPU cache between rounds
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
