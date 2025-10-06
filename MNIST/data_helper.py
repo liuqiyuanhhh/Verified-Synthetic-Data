@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import torch
 from torch.utils.data import Dataset, DataLoader
 import os
@@ -663,7 +664,13 @@ def generate_balanced_images_with_filtering(
                 if discriminator is not None:
                     # Apply filtering
                     with torch.no_grad():
-                        scores = discriminator.score(samples).squeeze(1)
+                        # Create one-hot encoding for all samples in the batch
+                        digit_tensor = torch.full(
+                            (len(samples),), digit, device=samples.device)
+                        digit_onehot = F.one_hot(
+                            digit_tensor, num_classes=10).float()
+                        scores = discriminator.score(
+                            samples, digit_onehot).squeeze(1)
 
                         if use_quantile_filtering:
                             # Use percentile-based filtering (selection_threshold is the percentile)
@@ -878,8 +885,10 @@ def prepare_discriminator_dataset(real_dataset, synthetic_model, device=None):
     real_images = torch.stack(real_images)
 
     # Ensure all tensors are on the same device
-    real_images = real_images.to(device)
-    synthetic_images = synthetic_images.to(device)
+    real_images = real_images.to(device)    # [real_size, 1, 28, 28]
+    synthetic_images = synthetic_images.to(device)  # [real_size, 1, 28, 28]
+    # print("real_images.shape", real_images.shape)
+    # print("synthetic_images.shape", synthetic_images.shape)
 
     # Create discriminator labels: 1 for real, 0 for synthetic
     real_disc_labels = torch.ones(
@@ -890,6 +899,66 @@ def prepare_discriminator_dataset(real_dataset, synthetic_model, device=None):
     # Concatenate real and synthetic data (now all on same device)
     X_all = torch.cat([real_images, synthetic_images], dim=0)
     y_all = torch.cat([real_disc_labels, synthetic_disc_labels], dim=0)
+
+    # print(f"Final combined dataset size: {len(X_all)}")
+    # print(f"Real samples: {torch.sum(y_all).item()}")
+    # print(f"Synthetic samples: {len(y_all) - torch.sum(y_all).item()}")
+
+    # Return simple TensorDataset - DataLoader will handle shuffling
+    return torch.utils.data.TensorDataset(X_all, y_all)
+
+
+def prepare_discriminator_dataset_with_labels(real_dataset, synthetic_model, device=None):
+    """
+    Prepare a balanced dataset of real and synthetic data for discriminator training.
+
+    Args:
+        real_dataset: PyTorch dataset (e.g., MNIST) or subset
+        synthetic_model: Trained CVAE model for generating synthetic data
+        device: Device to use for model and tensors (default: auto-detect)
+
+    Returns:
+        TensorDataset: Dataset object ready for DataLoader (DataLoader will handle shuffling)
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Get real dataset size
+    real_size = len(real_dataset)
+    # print(f"Real dataset size: {real_size}")
+
+    # Generate synthetic data to match real dataset size
+    synthetic_images, synthetic_labels = generate_balanced_synthetic_data(
+        synthetic_model, real_size, device
+    )
+
+    # Prepare real data
+    real_images = []
+    real_labels = []
+    for i in range(real_size):
+        img, label = real_dataset[i]  # Ignore original label
+        real_images.append(img)
+        real_labels.append(label)
+
+    real_images = torch.stack(real_images)
+    real_images = real_images.to(device)    # [real_size, 1, 28, 28]
+    real_labels = torch.tensor(real_labels, dtype=torch.long, device=device)
+    y_real_labels = torch.cat([F.one_hot(real_labels, num_classes=10).float(
+        # [real_size, 11]
+    ), torch.ones(real_size, 1, dtype=torch.long, device=device)], dim=1)
+    # Ensure all tensors are on the same device
+
+    synthetic_images = synthetic_images.to(device)  # [real_size, 1, 28, 28]
+    synthetic_labels = synthetic_labels.to(device)
+    y_synthetic_labels = torch.cat([F.one_hot(synthetic_labels, num_classes=10).float(
+        # [real_size, 11]
+    ), torch.zeros(len(synthetic_images), 1, dtype=torch.long, device=device)], dim=1)
+    # print("y_real_labels.shape", y_real_labels.shape)
+    # print("y_synthetic_labels.shape", y_synthetic_labels.shape)
+
+    # Concatenate real and synthetic data (now all on same device)
+    X_all = torch.cat([real_images, synthetic_images], dim=0)
+    y_all = torch.cat([y_real_labels, y_synthetic_labels], dim=0)
 
     # print(f"Final combined dataset size: {len(X_all)}")
     # print(f"Real samples: {torch.sum(y_all).item()}")

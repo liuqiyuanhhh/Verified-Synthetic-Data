@@ -62,17 +62,7 @@ def train_model(
 
         for x, y in train_loader:
             x = x.view(-1, 784).to(device)
-
-            # Get number of classes from model
-            if hasattr(model, 'label_dim'):
-                # CVAE model
-                num_classes = model.label_dim
-            else:
-                # Fallback: assume 10 classes (MNIST)
-                num_classes = 10
-
-            # Convert labels to one-hot encoding
-            y = one_hot(y, num_classes).to(device)
+            y = y.to(device)
 
             # Forward pass and loss computation
             optimizer.zero_grad()
@@ -200,17 +190,8 @@ def train_model_with_validation(
 
         for x, y in train_loader:
             x = x.view(-1, 784).to(device)
-
-            # Get number of classes from model
-            if hasattr(model, 'label_dim'):
-                # CVAE model
-                num_classes = model.label_dim
-            else:
-                # Fallback: assume 10 classes (MNIST)
-                num_classes = 10
-
-            # Convert labels to one-hot encoding
-            y = one_hot(y, num_classes).to(device)
+            # Just move to device, let each model handle its own y format
+            y = y.to(device)
 
             optimizer.zero_grad()
             loss, summary = model.loss(x, y)
@@ -245,17 +226,8 @@ def train_model_with_validation(
         with torch.no_grad():
             for x, y in val_loader:
                 x = x.view(-1, 784).to(device)
-
-                # Get number of classes from model
-                if hasattr(model, 'label_dim'):
-                    # CVAE model
-                    num_classes = model.label_dim
-                else:
-                    # Fallback: assume 10 classes (MNIST)
-                    num_classes = 10
-
-                # Convert labels to one-hot encoding
-                y = one_hot(y, num_classes).to(device)
+                # Just move to device, let each model handle its own y format
+                y = y.to(device)
 
                 loss, summary = model.loss(x, y)
                 val_loss += loss.item()
@@ -344,7 +316,7 @@ def calculate_validation_loss(
     with torch.no_grad():
         for x, y in val_loader:
             x = x.view(-1, 784).to(device)
-            y = one_hot(y).to(device)
+            y = y.to(device)  # Let each model handle its own y format
             loss, summary = model.loss(x, y)
             val_loss += loss.item()
             if 'recon' in summary.keys():
