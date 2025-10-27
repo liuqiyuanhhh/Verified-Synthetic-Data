@@ -213,7 +213,7 @@ class CVAE(nn.Module):
 
         return total_loss, summary
 
-    def sample_x_given_y(self, y, num_samples):
+    def sample_x_given_y(self, y, num_samples, binary_format: bool = True):
         device = next(self.parameters()).device
         # Generate random latent vectors
         z = torch.randn(num_samples, self.latent_dim, device=device)
@@ -227,7 +227,10 @@ class CVAE(nn.Module):
         logits = self.decoder.decode(z, y_onehot)
         prob = torch.sigmoid(logits)
 
-        return torch.bernoulli(prob)
+        if binary_format:
+            return torch.bernoulli(prob)
+        else:
+            return prob
 
     def get_name(self):
         return self.name

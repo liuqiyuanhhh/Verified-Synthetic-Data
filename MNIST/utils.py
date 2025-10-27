@@ -84,13 +84,14 @@ def compute_discriminator_score_distribution(model, disc_model, num_samples=5000
 
 
 # Plot n random samples for each digit
-def plot_samples_per_digit(num_samples, model):
+def plot_samples_per_digit(num_samples, model, binary_format=False):
     fig, axes = plt.subplots(10, num_samples, figsize=(num_samples, 12))
     fig.suptitle("10 Random Samples for Each Digit (0-9)", fontsize=16)
 
     for digit in range(10):
         # Find indices for this digit
-        samples = model.sample_x_given_y(digit, num_samples)
+        samples = model.sample_x_given_y(
+            digit, num_samples, binary_format=binary_format)
 
         for i in range(num_samples):
             img = samples[i].view(28, 28).cpu().detach().numpy()

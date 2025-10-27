@@ -172,7 +172,9 @@ def train_model_with_validation(
         'best_train_loss': float('inf'),
         'best_val_loss': float('inf'),
         'epochs_trained': 0,
-        'early_stopped': False
+        'early_stopped': False,
+        'train_last_summary': {},
+        'val_last_summary': {},
     }
 
     # Early stopping variables
@@ -255,6 +257,8 @@ def train_model_with_validation(
         history['train_losses'].append(avg_train_loss)
         history['val_losses'].append(avg_val_loss)
         history['epochs_trained'] = epoch + 1
+        history['train_last_summary'] = train_total_summary
+        history['val_last_summary'] = val_total_summary
 
         if verbose:
             print(
