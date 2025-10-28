@@ -365,7 +365,7 @@ class ConditionalDiscriminator(nn.Module):
     """
 
     def __init__(self, input_dim=784, name="", arch='mlp',
-                 base_channels=64, dropout=0.1, use_spectral_norm=True):
+                 base_channels=64, dropout=0, use_spectral_norm=True, label_smoothing=0.0):
         """
         Args:
             input_dim: Input dimension (784 for flattened MNIST)
@@ -379,7 +379,7 @@ class ConditionalDiscriminator(nn.Module):
         self.input_dim = input_dim
         self.num_classes = 10  # Number of digit classes
         self.arch = arch
-
+        self.label_smoothing = label_smoothing
         # Define spectral normalization transform
         self.spectral_norm_transform = lambda m: spectral_norm(
             m) if use_spectral_norm else m
@@ -395,16 +395,16 @@ class ConditionalDiscriminator(nn.Module):
 
     def _build_mlp_architecture(self, dropout):
         """Build MLP architecture similar to your current discriminator."""
-        hidden_dims = [512, 256, 128]
+        hidden_dims = [512, 256, 128, 64]
 
         # Input: image (784) + digit_onehot (10) = 794
         dims = [self.input_dim + self.num_classes, *hidden_dims, 1]
 
         layers = []
         for i in range(len(dims) - 2):
-            lin = self.spectral_norm_transform(nn.Linear(dims[i], dims[i+1]))
+            lin = nn.Linear(dims[i], dims[i+1])
             layers.extend([lin, nn.LeakyReLU(0.2, inplace=True)])
-            if dropout > 0:
+            if dropout > 0 and i < 2:
                 layers.append(nn.Dropout(p=dropout))
 
         # Output layer
@@ -419,17 +419,20 @@ class ConditionalDiscriminator(nn.Module):
         C_in = 1 + self.num_classes
 
         self.features = nn.Sequential(
-            self.spectral_norm_transform(
-                # 28 -> 14
-                nn.Conv2d(C_in, base_channels, 3, stride=2, padding=1)),
+            # 28 -> 14
+            nn.Conv2d(C_in, base_channels, 3, stride=1, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
-            self.spectral_norm_transform(
-                # 14 -> 7
-                nn.Conv2d(base_channels, base_channels*2, 3, stride=2, padding=1)),
+
+            # 14 -> 7
+            nn.Conv2d(base_channels, base_channels*2, 3, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
-            self.spectral_norm_transform(
-                nn.Conv2d(base_channels*2, base_channels*4, 3, stride=1, padding=1)),
+
+            nn.Conv2d(base_channels*2, base_channels *
+                      4, 3, stride=1, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
+
+            # Add adaptive pooling to ensure 7x7 output
+            nn.AdaptiveAvgPool2d((7, 7)),
         )
 
         # Build head layer with optional dropout
@@ -566,13 +569,17 @@ class ConditionalDiscriminator(nn.Module):
         # Forward pass
         logits = self.forward(x, y_digit)  # [batch_size, 1]
 
+        eps = max(0.0, min(0.2, self.label_smoothing))
+        if eps > 0.0:
+            target = target * (1.0 - eps) + 0.5 * eps
+
         # Binary Cross Entropy Loss
         total_loss = F.binary_cross_entropy_with_logits(
             logits, target, reduction='sum')
 
         # Calculate accuracy
         predictions = (logits > 0).float()
-        correct = predictions.eq(target).sum()
+        correct = predictions.eq(y[:, self.num_classes:]).sum()
 
         summary = {
             'accuracy': correct.item(),
