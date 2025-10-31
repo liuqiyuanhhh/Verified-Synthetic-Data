@@ -10,12 +10,30 @@ def one_hot(labels, num_classes=10):
     return F.one_hot(labels, num_classes).float()
 
 
+def param_groups_with_wd(module: torch.nn.Module, wd: float):
+    """Apply weight decay to weight matrices only (no decay for bias/norm/1D params)."""
+    decay, no_decay = [], []
+    for name, p in module.named_parameters():
+        if not p.requires_grad:
+            continue
+        n = name.lower()
+        if p.ndim == 1 or any(k in n for k in ("bias", "bn", "norm", "ln", "gn")):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    return [
+        {"params": decay,    "weight_decay": wd},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def train_model(
     model: torch.nn.Module,
     train_loader: DataLoader,
     device: torch.device,
     epochs: int = 100,
     lr: float = 1e-3,
+    wd: Optional[float] = None,
     patience: int = 5,
     verbose: bool = True
 ) -> dict:
@@ -37,14 +55,24 @@ def train_model(
         Tuple of (trained_model, training_history)
     """
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
+    if wd is not None and wd > 0.0:
+        param_groups = param_groups_with_wd(model, wd=wd)
+        # AdamW defaults: betas=(0.9,0.999), eps=1e-8
+        optimizer = torch.optim.AdamW(param_groups, lr=lr)
+        if verbose:
+            print(f"Using AdamW with weight decay: {wd}")
+    else:
+        # no weight decay requested
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        if verbose:
+            print("Using Adam without weight decay")
     # Training history
     history = {
         'train_losses': [],
         'best_loss': float('inf'),
         'epochs_trained': 0,
-        'early_stopped': False
+        'early_stopped': False,
+        'last_summary': {}
     }
 
     # Early stopping variables
@@ -94,6 +122,7 @@ def train_model(
         # Record history
         history['train_losses'].append(avg_loss)
         history['epochs_trained'] = epoch + 1
+        history['last_summary'] = total_summary
 
         if verbose:
             # Print epoch summary with accumulated statistics
@@ -140,6 +169,7 @@ def train_model_with_validation(
     device: torch.device,
     epochs: int = 100,
     lr: float = 1e-3,
+    wd: Optional[float] = None,
     patience: int = 5,
     verbose: bool = True
 ) -> dict:
@@ -161,7 +191,17 @@ def train_model_with_validation(
         Tuple of (trained_model, training_history)
     """
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    if wd is not None and wd > 0.0:
+        param_groups = param_groups_with_wd(model, wd=wd)
+        # AdamW defaults: betas=(0.9,0.999), eps=1e-8
+        optimizer = torch.optim.AdamW(param_groups, lr=lr)
+        if verbose:
+            print(f"Using AdamW with weight decay: {wd}")
+    else:
+        # no weight decay requested
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        if verbose:
+            print("Using Adam without weight decay")
     train_samples = len(train_loader.dataset)
     val_samples = len(val_loader.dataset)
 
