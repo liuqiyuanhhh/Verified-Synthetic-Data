@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import os
 import random
 
+# test of commit
 vae_path = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae"
 sys.path.append(vae_path)
 
