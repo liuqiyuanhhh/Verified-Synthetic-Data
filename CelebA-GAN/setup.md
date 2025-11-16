@@ -44,15 +44,7 @@ The experiment combines initial GAN training, ResNet-based feature filtering, an
   Higher score means the synthetic image lies closer to at least one real image in the ResNet18 feature space, and is therefore considered more “real-like”.
 
 
-4. **Chunked Processing (Memory-Friendly)**
-   - Total synthetic samples `synth_total` are split into `verifier_chunks`.
-   - For each chunk:
-     - Generate `chunk_total` fake images.
-     - Compute scores for all images in that chunk.
-     - Keep the top `keep_ratio` fraction (e.g., best 10% by score).
-   - Concatenate all kept images from all chunks to form the **filtered synthetic dataset**.
-
-5. **Verifier-Filtered Retraining**
+4. **Verifier-Filtered Retraining**
    - Train the GAN initially on a real subset (no verifier).
    - For each round:
      1. Generate `synth_total` synthetic images with the current generator.
