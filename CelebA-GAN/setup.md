@@ -26,19 +26,23 @@ The experiment combines initial GAN training, ResNet-based feature filtering, an
    - Generate a large batch of synthetic images using the current Generator `G`.
    - For each synthetic image:
      - Compute its 512-D feature `f_fake` via the same ResNet18 pipeline.
-     - Compute L2 distances to all real features:
-       \[
-       d_i = \| f_\text{fake} - f_{\text{real}, i} \|_2
-       \]
-     - Take the **minimum** distance:
-       \[
-       d_{\min} = \min_i d_i
-       \]
-     - Define the **score** as the negative distance:
-       \[
-       \text{score} = -d_{\min}
-       \]
-       - Higher score = closer to some real image = more “real-like”.
+    - Compute L2 distances to all real features:
+  $$
+  d_i = \left\| f_{\text{fake}} - f_{\text{real},i} \right\|_2
+  $$
+
+- Take the **minimum** distance:
+  $$
+  d_{\min} = \min_i d_i
+  $$
+
+- Define the **score** as the negative distance:
+  $$
+  \text{score} = - d_{\min}
+  $$
+
+  Higher score means the synthetic image lies closer to at least one real image in the ResNet18 feature space, and is therefore considered more “real-like”.
+
 
 4. **Chunked Processing (Memory-Friendly)**
    - Total synthetic samples `synth_total` are split into `verifier_chunks`.
