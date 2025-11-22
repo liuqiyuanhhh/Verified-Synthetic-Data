@@ -87,7 +87,7 @@ def _multiprocessing_generate_worker(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
-                    do_sample=True,
+                    do_sample=False,
                     pad_token_id=tokenizer.eos_token_id,
                     num_return_sequences=num_generations
                 )
@@ -165,7 +165,7 @@ def parse_args():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=1024,
+        default=256,
         help="Maximum sequence length (block size) for tokenization (default: 1024, matching Hugging Face Transformers v2 training recipe)"
     )
     parser.add_argument(
@@ -203,13 +203,13 @@ def parse_args():
     parser.add_argument(
         "--max_samples",
         type=int,
-        default=500000,
+        default=None,
         help="Maximum number of samples to load from dataset (default: 500000 for full XSum run)"
     )
     parser.add_argument(
         "--train_test_split_ratio",
         type=float,
-        default=0.8,
+        default=0.95,
         help="Ratio for train/test split (default: 0.8 for 80%% train, 20%% test)"
     )
     parser.add_argument(
@@ -230,7 +230,7 @@ def parse_args():
     parser.add_argument(
         "--num_generations",
         type=int,
-        default=2,
+        default=1,
         help="Number of candidate generations to create before filtering (e.g., 10)"
     )
     parser.add_argument(
@@ -280,7 +280,7 @@ def parse_args():
     parser.add_argument(
         "--num_iterations",
         type=int,
-        default=1,
+        default=20,
         help="Number of iterative retraining rounds (default: 1 for toy example)"
     )
     parser.add_argument(

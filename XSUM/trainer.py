@@ -127,8 +127,16 @@ class IterativeSummarizationTrainer:
         self.model.eval()
         results: List[List[str]] = []
         
+        total_batches = (len(prompts) + generation_batch_size - 1) // generation_batch_size
+        batch_indices = range(0, len(prompts), generation_batch_size)
+        
         with torch.no_grad():
-            for start in range(0, len(prompts), generation_batch_size):
+            for start in tqdm(
+                batch_indices,
+                total=total_batches,
+                desc=description,
+                unit="batch"
+            ):
                 batch_prompts = prompts[start:start + generation_batch_size]
                 original_padding_side = self.tokenizer.padding_side
                 self.tokenizer.padding_side = 'left'
@@ -146,7 +154,7 @@ class IterativeSummarizationTrainer:
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
-                    do_sample=True,
+                    do_sample=False,
                     pad_token_id=self.tokenizer.eos_token_id,
                     num_return_sequences=num_generations
                 )
@@ -198,6 +206,7 @@ class IterativeSummarizationTrainer:
         chunk_size = math.ceil(len(prompts) / num_gpus)
         
         try:
+            # Start all processes
             for rank, gpu_id in enumerate(range(num_gpus)):
                 start = rank * chunk_size
                 chunk_prompts = prompts[start:start + chunk_size]
@@ -222,12 +231,16 @@ class IterativeSummarizationTrainer:
                     )
                 )
                 process.start()
-                processes.append(process)
+                processes.append((rank, process))
             
-            for process in processes:
-                process.join()
-                if process.exitcode != 0:
-                    raise RuntimeError(f"Generation worker exited with code {process.exitcode}")
+            # Wait for processes with progress bar
+            with tqdm(total=len(processes), desc=f"{description} (multi-GPU)", unit="GPU") as pbar:
+                for rank, process in processes:
+                    process.join()
+                    if process.exitcode != 0:
+                        raise RuntimeError(f"Generation worker on GPU {rank} exited with code {process.exitcode}")
+                    pbar.update(1)
+                    pbar.set_postfix({"completed": f"{pbar.n}/{pbar.total} GPUs"})
         finally:
             shutil.rmtree(temp_root, ignore_errors=True)
         
@@ -338,66 +351,67 @@ class IterativeSummarizationTrainer:
         self.logger.info(f"Checkpoint loaded successfully")
         return optimizer
     
-    def load_dataset(self, dataset_name: str, split: str, max_samples: int = None, train_test_split_ratio: float = 0.8):
+    def load_dataset(self, dataset_name: str, split: str = None, max_samples: int = None, test_max_samples: int = None, train_test_split_ratio: float = None):
         """
-        Load news summarization dataset with optional limit and train/test split
+        Load news summarization dataset from train and validation splits
         
         Args:
-            dataset_name: Name of the dataset
-            split: Dataset split to load (e.g., 'train')
-            max_samples: Maximum number of samples to load (None for all)
-            train_test_split_ratio: Ratio for train/test split (default: 0.8)
+            dataset_name: Name of the dataset (e.g., 'xsum')
+            split: Deprecated - kept for backward compatibility but ignored. 
+                   Data is loaded from 'train' and 'validation' splits.
+            max_samples: Deprecated - kept for backward compatibility but will be ignored.
+                        All samples from 'train' split will be loaded.
+            test_max_samples: Maximum number of samples to load from 'validation' split (None for all)
+            train_test_split_ratio: Deprecated - kept for backward compatibility but ignored.
+                                    Test data comes from 'validation' split.
         
         Returns:
-            If train_test_split_ratio is provided:
-                (train_articles, train_summaries, test_articles, test_summaries)
-            Otherwise:
-                (articles, summaries)
+            (train_articles, train_summaries, test_articles, test_summaries)
         """
-        self.logger.info(f"Loading dataset: {dataset_name} (split: {split})")
+        self.logger.info(f"Loading dataset: {dataset_name} from 'train' and 'validation' splits")
+        
+        # Warn about deprecated max_samples parameter
+        if max_samples is not None:
+            self.logger.warning(
+                "The 'max_samples' parameter is deprecated and will be ignored. "
+                "All samples from the 'train' split will be loaded. "
+                "Use dataset filtering after loading if you need to limit samples."
+            )
+        
+        # Warn about deprecated train_test_split_ratio parameter
+        if train_test_split_ratio is not None:
+            self.logger.warning(
+                "The 'train_test_split_ratio' parameter is deprecated and will be ignored. "
+                "Test data comes from the 'validation' split of the dataset. "
+                "Use 'test_max_samples' to limit validation/test samples if needed."
+            )
+        
         try:
-            dataset = load_dataset(dataset_name, split=split)
+            # Load full dataset (similar to toy_example.py)
+            raw_datasets = load_dataset(dataset_name)
             
-            articles = [item["document"] for item in dataset]
-            summaries = [item["summary"] for item in dataset]
+            # Load train split - deprecated max_samples is ignored, load all samples
+            train_dataset = raw_datasets["train"]
             
-            # Limit to max_samples if specified
-            if max_samples is not None and max_samples > 0:
-                if len(articles) > max_samples:
-                    self.logger.info(f"Limiting dataset from {len(articles)} to {max_samples} samples")
-                    # Shuffle together to maintain pairing
-                    combined = list(zip(articles, summaries))
-                    random.shuffle(combined)
-                    articles, summaries = zip(*combined[:max_samples])
-                    articles = list(articles)
-                    summaries = list(summaries)
+            train_articles = [item["document"] for item in train_dataset]
+            train_summaries = [item["summary"] for item in train_dataset]
             
-            self.logger.info(f"Loaded {len(articles)} examples")
-            self.logger.debug(f"Sample article length: {len(articles[0]) if articles else 0} chars")
-            self.logger.debug(f"Sample summary length: {len(summaries[0]) if summaries else 0} chars")
+            # Load validation split for test data
+            test_dataset = raw_datasets["validation"]
+            if test_max_samples is not None and test_max_samples > 0:
+                self.logger.info(f"Selecting {test_max_samples} samples from validation split")
+                test_dataset = test_dataset.select(range(test_max_samples))
             
-            # Perform train/test split if requested
-            if train_test_split_ratio is not None and 0 < train_test_split_ratio < 1:
-                # Shuffle together to maintain pairing
-                combined = list(zip(articles, summaries))
-                random.shuffle(combined)
-                
-                split_idx = int(len(combined) * train_test_split_ratio)
-                train_data = combined[:split_idx]
-                test_data = combined[split_idx:]
-                
-                train_articles, train_summaries = zip(*train_data)
-                test_articles, test_summaries = zip(*test_data)
-                
-                train_articles = list(train_articles)
-                train_summaries = list(train_summaries)
-                test_articles = list(test_articles)
-                test_summaries = list(test_summaries)
-                
-                self.logger.info(f"Split into train: {len(train_articles)} samples, test: {len(test_articles)} samples")
-                return train_articles, train_summaries, test_articles, test_summaries
-            else:
-                return articles, summaries
+            test_articles = [item["document"] for item in test_dataset]
+            test_summaries = [item["summary"] for item in test_dataset]
+            
+            self.logger.info(f"Loaded {len(train_articles)} train examples and {len(test_articles)} test examples")
+            self.logger.debug(f"Sample train article length: {len(train_articles[0]) if train_articles else 0} chars")
+            self.logger.debug(f"Sample train summary length: {len(train_summaries[0]) if train_summaries else 0} chars")
+            self.logger.debug(f"Sample test article length: {len(test_articles[0]) if test_articles else 0} chars")
+            self.logger.debug(f"Sample test summary length: {len(test_summaries[0]) if test_summaries else 0} chars")
+            
+            return train_articles, train_summaries, test_articles, test_summaries
         except Exception as e:
             self.logger.exception(f"Failed to load dataset: {e}")
             raise
@@ -443,22 +457,27 @@ class IterativeSummarizationTrainer:
         generation_batch_size: int = 4
     ) -> List[Dict[str, str]]:
         """
-        Step 2: Generate synthetic summaries for ground truth articles
+        Step 2: Generate synthetic summaries for all articles in the full training dataset
         
         Args:
-            num_samples: Number of synthetic samples to generate
-            ground_truth_articles: List of ground truth articles to generate summaries for
+            num_samples: Deprecated - now generates summaries for all articles in ground_truth_articles
+            ground_truth_articles: List of all ground truth articles from training dataset to generate summaries for
             generation_batch_size: Batch size for parallel generation (speeds up processing)
         
-        Returns list of {article, summary} pairs
+        Returns list of {article, summary} pairs for all articles in the training dataset
         """
         if not ground_truth_articles:
             self.logger.warning("No ground truth articles provided for synthetic data generation")
             return []
         
-        articles_to_process = [ground_truth_articles[i % len(ground_truth_articles)] for i in range(num_samples)]
+        # Generate summaries for ALL articles in the full training dataset
+        articles_to_process = ground_truth_articles
+        total_articles = len(articles_to_process)
+        self.logger.info(f"Generating summaries for all {total_articles} articles in the training dataset")
+        
         prompts = [f"Article: {article}\n\nSummary:" for article in articles_to_process]
         
+        self.logger.info("Starting generation process...")
         generated_texts = self._generate_prompts(
             prompts=prompts,
             max_new_tokens=max_new_tokens,
@@ -467,11 +486,17 @@ class IterativeSummarizationTrainer:
             top_p=top_p,
             generation_batch_size=generation_batch_size,
             num_generations=self.num_generations,
-            description="Generating synthetic summaries"
+            description="Generating synthetic summaries for all training articles"
         )
         
+        self.logger.info("Processing generated summaries...")
         synthetic_data: List[Dict[str, str]] = []
-        for article, prompt, generations in zip(articles_to_process, prompts, generated_texts):
+        for article, prompt, generations in tqdm(
+            zip(articles_to_process, prompts, generated_texts),
+            total=total_articles,
+            desc="Processing generated summaries",
+            unit="article"
+        ):
             if not generations:
                 continue
             
@@ -488,9 +513,9 @@ class IterativeSummarizationTrainer:
                     "summary": summary
                 })
         
-        self.logger.info(f"Generated {len(synthetic_data)} valid synthetic samples out of {num_samples} attempts")
-        if len(synthetic_data) < num_samples:
-            self.logger.warning(f"Only {len(synthetic_data)}/{num_samples} samples were valid. Some generations may have failed parsing.")
+        self.logger.info(f"Generated {len(synthetic_data)} valid synthetic samples out of {total_articles} articles")
+        if len(synthetic_data) < total_articles:
+            self.logger.warning(f"Only {len(synthetic_data)}/{total_articles} samples were valid. Some generations may have failed parsing.")
         
         self.model.train()
         return synthetic_data
@@ -538,15 +563,16 @@ class IterativeSummarizationTrainer:
             test_summaries = test_summaries[:min_len]
         
         prompts = [f"Article: {article}\n\nSummary:" for article in test_articles]
+        # Use greedy decoding (temperature=0) for evaluation
         generated_texts = self._generate_prompts(
             prompts=prompts,
             max_new_tokens=max_new_tokens,
             prompt_max_length=prompt_max_length,
-            temperature=temperature,
-            top_p=top_p,
+            temperature=0.0,  # Greedy decoding
+            top_p=1.0,  # Not used with greedy decoding but set for consistency
             generation_batch_size=generation_batch_size,
             num_generations=1,
-            description="Evaluating summaries"
+            description="Evaluating summaries (greedy decoding)"
         )
         
         generated_summaries: List[str] = []
@@ -872,36 +898,31 @@ class IterativeSummarizationTrainer:
             "(pretrained Llama-2 init, lr=5e-5, scheduler=cosine, epochs=1, total batch size=32, block size=1024)."
         )
         
-        # Load dataset with optional limit and train/test split
-        dataset_result = self.load_dataset(
+        # Load dataset from train and validation splits
+        train_articles, train_summaries, test_articles, test_summaries = self.load_dataset(
             dataset_name, 
             dataset_split, 
             max_samples=max_samples,
             train_test_split_ratio=train_test_split_ratio
         )
         
-        # Handle return value (could be 2 or 4 values)
-        if len(dataset_result) == 4:
-            # Train/test split returned
-            train_articles, train_summaries, test_articles, test_summaries = dataset_result
-            articles = train_articles
-            summaries = train_summaries
-            # Store test set for potential evaluation later
-            self.test_articles = test_articles
-            self.test_summaries = test_summaries
-            self.logger.info(f"Using train set with {len(articles)} samples for training")
-            self.logger.info(f"Test set with {len(test_articles)} samples stored for evaluation")
-        else:
-            # No split, use all data
-            articles, summaries = dataset_result
+        # Use train split for training
+        articles = train_articles
+        summaries = train_summaries
+        # Store test set (from validation split) for evaluation
+        self.test_articles = test_articles
+        self.test_summaries = test_summaries
+        self.logger.info(f"Using train set with {len(articles)} samples for training")
+        self.logger.info(f"Test set (from validation split) with {len(test_articles)} samples stored for evaluation")
         
         # Step 1: Select initial 12.5% of data
         initial_articles, initial_summaries = self.select_initial_samples(
             articles, summaries, selection_method=initial_selection_method
         )
         
-        # Store all articles for potential use in synthetic generation
+        # Store all articles and summaries for potential use in synthetic generation
         all_available_articles = articles.copy()
+        all_available_summaries = summaries.copy()
         
         # Step 1: Train on initial data
         self.logger.info("\n" + "=" * 60)
@@ -963,17 +984,58 @@ class IterativeSummarizationTrainer:
                 self.logger.warning("No valid synthetic data generated. Skipping iteration.")
                 continue
             
-            # Extract articles and summaries from synthetic data
-            synthetic_articles = [item["article"] for item in synthetic_data]
-            synthetic_summaries = [item["summary"] for item in synthetic_data]
+            # Calculate ROUGE-1 scores for synthetic summaries against ground truth summaries
+            self.logger.info("Calculating ROUGE-1 scores for synthetic summaries...")
             
-            # Add synthetic data to training set
-            all_articles.extend(synthetic_articles)
-            all_summaries.extend(synthetic_summaries)
+            # Create a mapping from article to ground truth summary for quick lookup
+            article_to_ground_truth_summary = dict(zip(all_available_articles, all_available_summaries))
+            
+            # Score each synthetic summary against its ground truth summary
+            synthetic_data_with_scores = []
+            for item in tqdm(synthetic_data, desc="Calculating ROUGE-1 scores", unit="sample"):
+                article = item["article"]
+                synthetic_summary = item["summary"]
+                
+                # Find corresponding ground truth summary
+                ground_truth_summary = article_to_ground_truth_summary.get(article)
+                if ground_truth_summary is None:
+                    self.logger.warning(f"Ground truth summary not found for article, skipping...")
+                    continue
+                
+                # Calculate ROUGE-1 score
+                rouge1_score = self.calculate_rouge1(ground_truth_summary, synthetic_summary)
+                synthetic_data_with_scores.append({
+                    "article": article,
+                    "summary": synthetic_summary,
+                    "rouge1_score": rouge1_score
+                })
+            
+            if not synthetic_data_with_scores:
+                self.logger.warning("No synthetic data with valid ground truth matches. Skipping iteration.")
+                continue
+            
+            # Sort by ROUGE-1 score (descending) and select top base_data_ratio percentage
+            synthetic_data_with_scores.sort(key=lambda x: x["rouge1_score"], reverse=True)
+            num_to_select = int(len(synthetic_data_with_scores) * self.base_data_ratio)
+            selected_synthetic_data = synthetic_data_with_scores[:num_to_select]
+            
+            self.logger.info(
+                f"Selected top {len(selected_synthetic_data)} synthetic samples "
+                f"({self.base_data_ratio*100}%) with highest ROUGE-1 scores "
+                f"(range: {selected_synthetic_data[-1]['rouge1_score']:.4f} - {selected_synthetic_data[0]['rouge1_score']:.4f})"
+            )
+            
+            # Extract articles and summaries from selected synthetic data
+            selected_synthetic_articles = [item["article"] for item in selected_synthetic_data]
+            selected_synthetic_summaries = [item["summary"] for item in selected_synthetic_data]
+            
+            # Add only selected synthetic data to training set
+            all_articles = selected_synthetic_articles.copy()
+            all_summaries = selected_synthetic_summaries.copy()
             
             self.logger.info(f"Total training samples: {len(all_articles)}")
             self.logger.info(f"  - Initial: {len(initial_articles)}")
-            self.logger.info(f"  - Synthetic (this round): {len(synthetic_articles)}")
+            self.logger.info(f"  - Synthetic (this round, selected): {len(selected_synthetic_articles)}/{len(synthetic_data)}")
             self.logger.info(f"  - Total synthetic: {len(all_articles) - len(initial_articles)}")
             self.logger.debug(f"Training data growth: {len(all_articles) - len(initial_articles)} new samples")
             
