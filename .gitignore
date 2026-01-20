@@ -1,0 +1,42 @@
+# Python cache
+__pycache__/
+**/__pycache__/
+
+# Logs
+logs/
+**/logs/
+
+# Pickle files
+*.pkl
+**/*.pkl
+
+# pt files
+*.pt
+**/*.pt
+
+# png files
+*.png
+**/*.png
+
+# pdf files
+*.pdf
+**/*.pdf
+
+# csv files
+*.csv
+**/*.csv
+
+data/
+**/data/
+
+CelebA/experiments
+
+MNIST/archived
+MNIST/result
+MNIST/conv_cvae/result
+
+# datasets
+CelebA/
+
+# simulation (not committing yet)
+simulation/MNIST/scripts/full_pipeline.py
