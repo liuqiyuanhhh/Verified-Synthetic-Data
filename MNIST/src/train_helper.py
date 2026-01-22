@@ -10,12 +10,30 @@ def one_hot(labels, num_classes=10):
     return F.one_hot(labels, num_classes).float()
 
 
+def param_groups_with_wd(module: torch.nn.Module, wd: float):
+    """Apply weight decay to weight matrices only (no decay for bias/norm/1D params)."""
+    decay, no_decay = [], []
+    for name, p in module.named_parameters():
+        if not p.requires_grad:
+            continue
+        n = name.lower()
+        if p.ndim == 1 or any(k in n for k in ("bias", "bn", "norm", "ln", "gn")):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    return [
+        {"params": decay,    "weight_decay": wd},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def train_model(
     model: torch.nn.Module,
     train_loader: DataLoader,
     device: torch.device,
     epochs: int = 100,
     lr: float = 1e-3,
+    wd: Optional[float] = None,
     patience: int = 5,
     verbose: bool = True
 ) -> dict:
@@ -37,14 +55,24 @@ def train_model(
         Tuple of (trained_model, training_history)
     """
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
+    if wd is not None and wd > 0.0:
+        param_groups = param_groups_with_wd(model, wd=wd)
+        # AdamW defaults: betas=(0.9,0.999), eps=1e-8
+        optimizer = torch.optim.AdamW(param_groups, lr=lr)
+        if verbose:
+            print(f"Using AdamW with weight decay: {wd}")
+    else:
+        # no weight decay requested
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        if verbose:
+            print("Using Adam without weight decay")
     # Training history
     history = {
         'train_losses': [],
         'best_loss': float('inf'),
         'epochs_trained': 0,
-        'early_stopped': False
+        'early_stopped': False,
+        'last_summary': {}
     }
 
     # Early stopping variables
@@ -62,17 +90,7 @@ def train_model(
 
         for x, y in train_loader:
             x = x.view(-1, 784).to(device)
-
-            # Get number of classes from model
-            if hasattr(model, 'label_dim'):
-                # CVAE model
-                num_classes = model.label_dim
-            else:
-                # Fallback: assume 10 classes (MNIST)
-                num_classes = 10
-
-            # Convert labels to one-hot encoding
-            y = one_hot(y, num_classes).to(device)
+            y = y.to(device)
 
             # Forward pass and loss computation
             optimizer.zero_grad()
@@ -104,6 +122,7 @@ def train_model(
         # Record history
         history['train_losses'].append(avg_loss)
         history['epochs_trained'] = epoch + 1
+        history['last_summary'] = total_summary
 
         if verbose:
             # Print epoch summary with accumulated statistics
@@ -150,6 +169,7 @@ def train_model_with_validation(
     device: torch.device,
     epochs: int = 100,
     lr: float = 1e-3,
+    wd: Optional[float] = None,
     patience: int = 5,
     verbose: bool = True
 ) -> dict:
@@ -171,7 +191,17 @@ def train_model_with_validation(
         Tuple of (trained_model, training_history)
     """
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    if wd is not None and wd > 0.0:
+        param_groups = param_groups_with_wd(model, wd=wd)
+        # AdamW defaults: betas=(0.9,0.999), eps=1e-8
+        optimizer = torch.optim.AdamW(param_groups, lr=lr)
+        if verbose:
+            print(f"Using AdamW with weight decay: {wd}")
+    else:
+        # no weight decay requested
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        if verbose:
+            print("Using Adam without weight decay")
     train_samples = len(train_loader.dataset)
     val_samples = len(val_loader.dataset)
 
@@ -182,7 +212,9 @@ def train_model_with_validation(
         'best_train_loss': float('inf'),
         'best_val_loss': float('inf'),
         'epochs_trained': 0,
-        'early_stopped': False
+        'early_stopped': False,
+        'train_last_summary': {},
+        'val_last_summary': {},
     }
 
     # Early stopping variables
@@ -200,17 +232,8 @@ def train_model_with_validation(
 
         for x, y in train_loader:
             x = x.view(-1, 784).to(device)
-
-            # Get number of classes from model
-            if hasattr(model, 'label_dim'):
-                # CVAE model
-                num_classes = model.label_dim
-            else:
-                # Fallback: assume 10 classes (MNIST)
-                num_classes = 10
-
-            # Convert labels to one-hot encoding
-            y = one_hot(y, num_classes).to(device)
+            # Just move to device, let each model handle its own y format
+            y = y.to(device)
 
             optimizer.zero_grad()
             loss, summary = model.loss(x, y)
@@ -245,17 +268,8 @@ def train_model_with_validation(
         with torch.no_grad():
             for x, y in val_loader:
                 x = x.view(-1, 784).to(device)
-
-                # Get number of classes from model
-                if hasattr(model, 'label_dim'):
-                    # CVAE model
-                    num_classes = model.label_dim
-                else:
-                    # Fallback: assume 10 classes (MNIST)
-                    num_classes = 10
-
-                # Convert labels to one-hot encoding
-                y = one_hot(y, num_classes).to(device)
+                # Just move to device, let each model handle its own y format
+                y = y.to(device)
 
                 loss, summary = model.loss(x, y)
                 val_loss += loss.item()
@@ -283,6 +297,8 @@ def train_model_with_validation(
         history['train_losses'].append(avg_train_loss)
         history['val_losses'].append(avg_val_loss)
         history['epochs_trained'] = epoch + 1
+        history['train_last_summary'] = train_total_summary
+        history['val_last_summary'] = val_total_summary
 
         if verbose:
             print(
@@ -344,7 +360,7 @@ def calculate_validation_loss(
     with torch.no_grad():
         for x, y in val_loader:
             x = x.view(-1, 784).to(device)
-            y = one_hot(y).to(device)
+            y = y.to(device)  # Let each model handle its own y format
             loss, summary = model.loss(x, y)
             val_loss += loss.item()
             if 'recon' in summary.keys():
