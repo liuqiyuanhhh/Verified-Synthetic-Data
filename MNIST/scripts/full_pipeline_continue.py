@@ -13,13 +13,18 @@ import matplotlib.pyplot as plt
 import os
 import random
 
-vae_path = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae"
-sys.path.append(vae_path)
+from pathlib import Path
+
+# --------------------- paths & imports ---------------------
+THIS_DIR = Path(__file__).resolve().parent
+SRC_DIR = THIS_DIR.parent / "src"
+sys.path.append(str(SRC_DIR))
 
 import models as models
 import train_helper as train_helper
 import utils as utils
 import data_helper as data_helper
+from FID import calculate_fid_score
 
 # Set up device and seed
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,12 +34,12 @@ torch.cuda.manual_seed_all(base_seed)
 np.random.seed(base_seed)
 random.seed(base_seed)
 
-ROOT = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/continued_256_4"
-
-model_saved_path = os.path.join(ROOT,"model_saved_more")
-data_saved_path = os.path.join(ROOT,"data_saved_more")
-results_saved_path = os.path.join(ROOT,"results_saved_more")
-picture_saved_path = os.path.join(ROOT,"picture_saved_more")
+BASE_ROOT = THIS_DIR.parent / "conv_cvae" / "larger_initial_sample_size"
+ROOT = BASE_ROOT / f"init_500"
+model_saved_path = ROOT / "model_saved_more"
+data_saved_path = ROOT / "data_saved_more"
+results_saved_path = ROOT / "results_saved_more"
+picture_saved_path = ROOT / "picture_saved_more"
 os.makedirs(results_saved_path, exist_ok=True)
 
 import torch

@@ -29,14 +29,21 @@ logs/
 data/
 **/data/
 
+# sh file
+*.sh
+**/*.sh
+
 CelebA/experiments
 
 MNIST/archived
+
 MNIST/result
-MNIST/conv_cvae/result
+MNIST/plots
+MNIST/scripts/vary_synthetic_sample_dis.py
+MNIST/scripts/verifier_quality.py
 
 # datasets
 CelebA/
 
 # simulation (not committing yet)
-simulation/MNIST/scripts/full_pipeline.py
+simulation/

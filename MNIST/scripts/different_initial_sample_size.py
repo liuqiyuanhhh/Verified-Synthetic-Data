@@ -13,10 +13,12 @@ from torchvision import datasets, transforms
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 # --------------------- paths & imports ---------------------
-vae_path = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae"
-sys.path.append(vae_path)
+THIS_DIR = Path(__file__).resolve().parent
+SRC_DIR = THIS_DIR.parent / "src"
+sys.path.append(str(SRC_DIR))
 
 import models as models
 import train_helper as train_helper
@@ -54,12 +56,12 @@ np.random.seed(base_seed)
 random.seed(base_seed)
 
 # --------------------- output layout (per-init folders) ---------------------
-BASE_ROOT = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/larger_initial_sample_size"
-ROOT = os.path.join(BASE_ROOT, f"init_{init_size}")
-model_saved_path   = os.path.join(ROOT, "model_saved_more")
-data_saved_path    = os.path.join(ROOT, "data_saved_more")
-results_saved_path = os.path.join(ROOT, "results_saved_more")
-picture_saved_path = os.path.join(ROOT, "picture_saved_more")
+BASE_ROOT = THIS_DIR.parent / "conv_cvae" / "larger_initial_sample_size"
+ROOT = BASE_ROOT / f"init_{init_size}"
+model_saved_path   = ROOT / "model_saved_more"
+data_saved_path    = ROOT / "data_saved_more"
+results_saved_path = ROOT / "results_saved_more"
+picture_saved_path = ROOT / "picture_saved_more"
 os.makedirs(model_saved_path, exist_ok=True)
 os.makedirs(data_saved_path, exist_ok=True)
 os.makedirs(results_saved_path, exist_ok=True)

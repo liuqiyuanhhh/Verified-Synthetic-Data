@@ -12,16 +12,36 @@ import numpy as np
 import pandas as pd
 
 # ------------------ Paths  ------------------
-VAE_PATH = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae"
-FULL_GEN_CKPT_DIR = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/model_saved_full_dataset"
-FULL_GEN_CKPT = os.path.join(FULL_GEN_CKPT_DIR, "full_dataset_model.pth")
+import os
+from pathlib import Path
 
-ROOT = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/one_strong_vae_appendix"
-MODEL_SAVED_PATH = os.path.join(ROOT, "model_saved_more")
-DISC_SAVED_PATH  = os.path.join(MODEL_SAVED_PATH, "discriminators")
-SUBSET_MODEL_DIR = os.path.join(MODEL_SAVED_PATH, "subset_generators")
-RESULTS_PATH     = os.path.join(ROOT, "results_saved_more")
-MANIFEST_CSV     = os.path.join(RESULTS_PATH, "discriminator_manifest.csv")
+THIS_DIR = Path(__file__).resolve().parent
+
+MNIST_ROOT = THIS_DIR.parent
+
+VAE_PATH = MNIST_ROOT / "conv_cvae"
+
+FULL_GEN_CKPT_DIR = VAE_PATH / "model_saved_full_dataset"
+FULL_GEN_CKPT = FULL_GEN_CKPT_DIR / "full_dataset_model.pth"
+
+ROOT = VAE_PATH / "one_strong_vae_appendix"
+
+MODEL_SAVED_PATH = ROOT / "model_saved_more"
+DISC_SAVED_PATH  = MODEL_SAVED_PATH / "discriminators"
+SUBSET_MODEL_DIR = MODEL_SAVED_PATH / "subset_generators"
+
+RESULTS_PATH = ROOT / "results_saved_more"
+MANIFEST_CSV = RESULTS_PATH / "discriminator_manifest.csv"
+
+VAE_PATH = str(VAE_PATH)
+FULL_GEN_CKPT_DIR = str(FULL_GEN_CKPT_DIR)
+FULL_GEN_CKPT = str(FULL_GEN_CKPT)
+ROOT = str(ROOT)
+MODEL_SAVED_PATH = str(MODEL_SAVED_PATH)
+DISC_SAVED_PATH = str(DISC_SAVED_PATH)
+SUBSET_MODEL_DIR = str(SUBSET_MODEL_DIR)
+RESULTS_PATH = str(RESULTS_PATH)
+MANIFEST_CSV = str(MANIFEST_CSV)
 
 for d in [MODEL_SAVED_PATH, DISC_SAVED_PATH, SUBSET_MODEL_DIR, RESULTS_PATH]:
     os.makedirs(d, exist_ok=True)
