@@ -10,10 +10,12 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 from torchvision.transforms.functional import resize
 from torchmetrics.image.fid import FrechetInceptionDistance
+import data_helper
 
 @torch.no_grad()
-def calculate_fid_score(real_ds, synth_ds, batch_size: int = 256) -> float:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def calculate_fid_score(real_ds, synth_ds, batch_size: int = 256, device: torch.device = None) -> float:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
 
     def preprocess(batch: torch.Tensor) -> torch.Tensor:
@@ -45,3 +47,22 @@ def calculate_fid_score(real_ds, synth_ds, batch_size: int = 256) -> float:
     fid.reset()
     return score
 
+
+def calculate_fid_from_model(real_ds, model, batch_size: int = 128, device: torch.device = None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
+    synthetic_data_size = len(real_ds)
+    gen_imgs_before_filter, y_before_filter = data_helper.generate_balanced_synthetic_data(
+        synthetic_model=model,
+        target_size=synthetic_data_size,
+        binary_format=False,
+        device=device
+    )
+    synthetic_ds = torch.utils.data.TensorDataset(
+        gen_imgs_before_filter, y_before_filter)
+    fid = calculate_fid_score(
+        real_ds, synthetic_ds, batch_size=batch_size, device=device)
+
+    return fid

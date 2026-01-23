@@ -1,3 +1,4 @@
+from re import sub
 import torch
 import matplotlib.pyplot as plt
 import os
@@ -15,18 +16,18 @@ def save_model(model, model_name, path):
     print(f"Model saved to {model_path}")
 
 
-def load_model(model_name, path, input_device=None, model_dimension=None):
+def load_model(model_name, path, input_device=None, model_args=None):
     name_tokens = model_name.split("_")
     if name_tokens[0] == "cvae":
-        if model_dimension is None:
+        if model_args is None:
             model = models.CVAE()
         else:
-            model = models.CVAE(*model_dimension)
+            model = models.CVAE(*model_args)
     elif name_tokens[0] == "disc":
-        if model_dimension is None:
+        if model_args is None:
             model = models.SyntheticDiscriminator()
         else:
-            model = models.SyntheticDiscriminator(*model_dimension)
+            model = models.SyntheticDiscriminator(*model_args)
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -83,13 +84,14 @@ def compute_discriminator_score_distribution(model, disc_model, num_samples=5000
 
 
 # Plot n random samples for each digit
-def plot_samples_per_digit(num_samples, model):
+def plot_samples_per_digit(num_samples, model, binary_format=False):
     fig, axes = plt.subplots(10, num_samples, figsize=(num_samples, 12))
     fig.suptitle("10 Random Samples for Each Digit (0-9)", fontsize=16)
 
     for digit in range(10):
         # Find indices for this digit
-        samples = model.sample_x_given_y(digit, num_samples)
+        samples = model.sample_x_given_y(
+            digit, num_samples, binary_format=binary_format)
 
         for i in range(num_samples):
             img = samples[i].view(28, 28).cpu().detach().numpy()
@@ -215,22 +217,42 @@ def get_balanced_subset(digit_indices, subset_size):
         Subset with balanced digit distribution
     """
     # Calculate samples per digit
-    samples_per_digit = subset_size // 10
+    if not isinstance(subset_size, list) and not isinstance(subset_size, int):
+        raise ValueError(
+            f"Invalid subset size: {subset_size}, must be a list of two integers or an integer")
+
+    if isinstance(subset_size, list) and len(subset_size) != 2:
+        raise ValueError(
+            f"Invalid subset size: {subset_size}, must be a list of two integers")
 
     # Take samples from each digit
     subset_indices = []
     for digit in range(10):
         # Take samples_per_digit samples, plus one extra for first 'remainder' digits
+        if isinstance(subset_size, list):
+            if len(digit_indices[digit]) < subset_size[0]:
+                raise ValueError(
+                    f"Not enough samples for digit {digit}, required at least {subset_size[0]} samples, but only {len(digit_indices[digit])} samples available")
 
-        num_samples = samples_per_digit
+            end_index = subset_size[1]
+            if len(digit_indices[digit]) < end_index:
+                print(
+                    f"Warning: Only {len(digit_indices[digit])} samples for digit {digit}, taking all available")
+                end_index = len(digit_indices[digit])
 
-        if num_samples > len(digit_indices[digit]):
-            print(
-                f"Warning: Only {len(digit_indices[digit])} samples for digit {digit}, taking all available")
-            num_samples = len(digit_indices[digit])
+            subset_indices.extend(
+                digit_indices[digit][subset_size[0]:end_index])
 
-        # Take first num_samples from this digit's shuffled indices
-        subset_indices.extend(digit_indices[digit][:num_samples])
+        elif isinstance(subset_size, int):
+            num_samples = subset_size // 10
+
+            if num_samples > len(digit_indices[digit]):
+                print(
+                    f"Warning: Only {len(digit_indices[digit])} samples for digit {digit}, taking all available")
+                num_samples = len(digit_indices[digit])
+
+            # Take first num_samples from this digit's shuffled indices
+            subset_indices.extend(digit_indices[digit][:num_samples])
 
     return subset_indices
 
