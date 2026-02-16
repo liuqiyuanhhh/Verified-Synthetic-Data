@@ -1,5 +1,8 @@
-torchvision
-torch
-matplotlib
-numpy
-cvae_model
+# XSUM news summarization pipeline
+torch>=2.0.0
+transformers>=4.30.0
+datasets>=2.14.0
+numpy>=1.24.0
+tqdm>=4.65.0
+loguru>=0.7.0
+rouge-score>=0.1.2
