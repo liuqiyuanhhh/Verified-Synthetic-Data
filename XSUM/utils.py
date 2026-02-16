@@ -275,6 +275,12 @@ def parse_args():
         action="store_true",
         help="If set, use ground truth articles and only generate summaries"
     )
+    parser.add_argument(
+        "--use_unfiltered_synthetic_data",
+        default=False,
+        action="store_true",
+        help="If set, use all unfiltered synthetic data; otherwise use filtered (top N%% by ROUGE-1)"
+    )
     
     # Training parameters
     parser.add_argument(
@@ -332,7 +338,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/net/scratch/yuweicheng/output",
+        default="/net/scratch/yuweicheng/output_linear",
         help="Output directory for saving models (default: '/net/scratch/yuweicheng/output')"
     )
     parser.add_argument(

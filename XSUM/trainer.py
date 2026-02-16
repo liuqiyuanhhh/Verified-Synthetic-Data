@@ -876,7 +876,8 @@ class IterativeSummarizationTrainer:
         save_optimizer: bool,
         max_samples: Optional[int] = None,
         train_test_split_ratio: Optional[float] = None,
-        generation_batch_size: int = 4
+        generation_batch_size: int = 4,
+        use_filtered_synthetic_data: bool = True
     ):
         """
         Main pipeline: Run iterative retraining
@@ -896,6 +897,9 @@ class IterativeSummarizationTrainer:
         self.logger.info(
             "Training recipe: Hugging Face Transformers v2 (Apache 2.0) defaults "
             "(pretrained Llama-2 init, lr=5e-5, scheduler=cosine, epochs=1, total batch size=32, block size=1024)."
+        )
+        self.logger.info(
+            f"  - Synthetic data mode: {'filtered (ROUGE-1 top selection)' if use_filtered_synthetic_data else 'unfiltered (all synthetic)'}"
         )
         
         # Load dataset from train and validation splits
@@ -969,7 +973,20 @@ class IterativeSummarizationTrainer:
             self.logger.info(f"ROUND {iteration}: Iterative Retraining")
             self.logger.info("=" * 60)
             
-            # Step 2: Generate synthetic data using ground truth articles
+            # initial_articles, _ = self.select_initial_samples(
+            #     articles, summaries, selection_method=initial_selection_method
+            # )
+            # synthetic_data = self.generate_synthetic_data(
+            #     num_samples=synthetic_samples_per_iteration,
+            #     temperature=temperature,
+            #     top_p=top_p,
+            #     max_new_tokens=max_new_tokens,
+            #     prompt_max_length=prompt_max_length,
+            #     ground_truth_articles=initial_articles,
+            #     generation_batch_size=generation_batch_size
+            # )
+                        
+            #Step 2: Generate synthetic data using ground truth articles
             synthetic_data = self.generate_synthetic_data(
                 num_samples=synthetic_samples_per_iteration,
                 temperature=temperature,
@@ -984,52 +1001,49 @@ class IterativeSummarizationTrainer:
                 self.logger.warning("No valid synthetic data generated. Skipping iteration.")
                 continue
             
-            # Calculate ROUGE-1 scores for synthetic summaries against ground truth summaries
-            self.logger.info("Calculating ROUGE-1 scores for synthetic summaries...")
-            
-            # Create a mapping from article to ground truth summary for quick lookup
-            article_to_ground_truth_summary = dict(zip(all_available_articles, all_available_summaries))
-            
-            # Score each synthetic summary against its ground truth summary
-            synthetic_data_with_scores = []
-            for item in tqdm(synthetic_data, desc="Calculating ROUGE-1 scores", unit="sample"):
-                article = item["article"]
-                synthetic_summary = item["summary"]
-                
-                # Find corresponding ground truth summary
-                ground_truth_summary = article_to_ground_truth_summary.get(article)
-                if ground_truth_summary is None:
-                    self.logger.warning(f"Ground truth summary not found for article, skipping...")
+            if use_filtered_synthetic_data:
+                # Filtered: Calculate ROUGE-1 scores and select top N% by ROUGE-1
+                self.logger.info("Calculating ROUGE-1 scores for synthetic summaries (filtered mode)...")
+                article_to_ground_truth_summary = dict(zip(all_available_articles, all_available_summaries))
+                synthetic_data_with_scores = []
+                for item in tqdm(synthetic_data, desc="Calculating ROUGE-1 scores", unit="sample"):
+                    article = item["article"]
+                    synthetic_summary = item["summary"]
+                    ground_truth_summary = article_to_ground_truth_summary.get(article)
+                    if ground_truth_summary is None:
+                        self.logger.warning(f"Ground truth summary not found for article, skipping...")
+                        continue
+                    rouge1_score = self.calculate_rouge1(ground_truth_summary, synthetic_summary)
+                    synthetic_data_with_scores.append({
+                        "article": article,
+                        "summary": synthetic_summary,
+                        "rouge1_score": rouge1_score
+                    })
+                if not synthetic_data_with_scores:
+                    self.logger.warning("No synthetic data with valid ground truth matches. Skipping iteration.")
                     continue
-                
-                # Calculate ROUGE-1 score
-                rouge1_score = self.calculate_rouge1(ground_truth_summary, synthetic_summary)
-                synthetic_data_with_scores.append({
-                    "article": article,
-                    "summary": synthetic_summary,
-                    "rouge1_score": rouge1_score
-                })
+                synthetic_data_with_scores.sort(key=lambda x: x["rouge1_score"], reverse=True)
+                num_to_select = int(len(synthetic_data_with_scores) * (self.base_data_ratio + iteration * self.base_data_ratio/10))
+                selected_synthetic_data = synthetic_data_with_scores[:num_to_select]
+                self.logger.info(
+                    f"Selected top {len(selected_synthetic_data)} synthetic samples (filtered by ROUGE-1) "
+                    f"(range: {selected_synthetic_data[-1]['rouge1_score']:.4f} - {selected_synthetic_data[0]['rouge1_score']:.4f})"
+                )
+                selected_synthetic_articles = [item["article"] for item in selected_synthetic_data]
+                selected_synthetic_summaries = [item["summary"] for item in selected_synthetic_data]
+            else:
+                # Unfiltered: Randomly select num_to_select samples (no ROUGE-1 filtering)
+                num_to_select = int(len(synthetic_data) * (self.base_data_ratio + iteration * self.base_data_ratio / 10))
+                num_to_select = min(num_to_select, len(synthetic_data))
+                indices = random.sample(range(len(synthetic_data)), num_to_select)
+                selected_synthetic_data = [synthetic_data[i] for i in indices]
+                self.logger.info(
+                    f"Randomly selected {len(selected_synthetic_data)} synthetic samples (unfiltered mode)..."
+                )
+                selected_synthetic_articles = [item["article"] for item in selected_synthetic_data]
+                selected_synthetic_summaries = [item["summary"] for item in selected_synthetic_data]
             
-            if not synthetic_data_with_scores:
-                self.logger.warning("No synthetic data with valid ground truth matches. Skipping iteration.")
-                continue
-            
-            # Sort by ROUGE-1 score (descending) and select top base_data_ratio percentage
-            synthetic_data_with_scores.sort(key=lambda x: x["rouge1_score"], reverse=True)
-            num_to_select = int(len(synthetic_data_with_scores) * self.base_data_ratio)
-            selected_synthetic_data = synthetic_data_with_scores[:num_to_select]
-            
-            self.logger.info(
-                f"Selected top {len(selected_synthetic_data)} synthetic samples "
-                f"({self.base_data_ratio*100}%) with highest ROUGE-1 scores "
-                f"(range: {selected_synthetic_data[-1]['rouge1_score']:.4f} - {selected_synthetic_data[0]['rouge1_score']:.4f})"
-            )
-            
-            # Extract articles and summaries from selected synthetic data
-            selected_synthetic_articles = [item["article"] for item in selected_synthetic_data]
-            selected_synthetic_summaries = [item["summary"] for item in selected_synthetic_data]
-            
-            # Add only selected synthetic data to training set
+            # Add synthetic data to training set
             all_articles = selected_synthetic_articles.copy()
             all_summaries = selected_synthetic_summaries.copy()
             
@@ -1132,7 +1146,8 @@ def main():
             save_optimizer=args.save_optimizer,
             max_samples=args.max_samples,
             train_test_split_ratio=args.train_test_split_ratio,
-            generation_batch_size=args.generation_batch_size
+            generation_batch_size=args.generation_batch_size,
+            use_filtered_synthetic_data=not args.use_unfiltered_synthetic_data
         )
     except Exception as e:
         logger.exception(f"Training failed: {e}")
