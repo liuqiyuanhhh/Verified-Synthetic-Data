@@ -38,7 +38,8 @@ torch.cuda.manual_seed_all(base_seed)
 np.random.seed(base_seed)
 random.seed(base_seed)
 
-ROOT = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/one_strong_vae_appendix"
+PROJECT_ROOT = THIS_DIR.parent
+ROOT = PROJECT_ROOT / "MNIST/conv_cvae/one_strong_vae_appendix"
 model_saved_path = os.path.join(ROOT,"model_saved_more")
 data_saved_path = os.path.join(ROOT,"data_saved_more")
 results_saved_path = os.path.join(ROOT,"results_saved_more")
@@ -46,20 +47,11 @@ picture_saved_path = os.path.join(ROOT,"picture_saved_more")
 os.makedirs(results_saved_path, exist_ok=True)
 #################  size schedule #################
 
-#start = 10_000
-#end = 256_000
-#k = 40 
-#/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/model_saved_full_dataset/full_dataset_model.pth
-#size_schedule = ((np.linspace(start, end, k) / 10).round().astype(int) * 10).tolist()
-
 start = 30000
 end = 1000000
 k = 20
 size_schedule = ((np.linspace(start, end, k) / 10).round().astype(int) * 10).tolist()
-#size_schedule = (np.arange(k) * step + start).tolist()
 
-#k = 40
-#size_schedule = [20_000] * k
 ################### real ############################
 full_dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transforms.ToTensor())
 
@@ -232,8 +224,8 @@ threshold = 0.1           # discriminator selection threshold
 
 ################### full dataset trained discriminator ############################
 full_real_model = models.CVAE(input_dim=784, label_dim=10, latent_dim=20, arch="conv").to(device)
-model_saved_path1 = "/home/qiyuanliu/data_filter/Verified-Synthetic-Data/MNIST/conv_cvae/model_saved_full_dataset/"
-ckpt_path = os.path.join(model_saved_path1, "full_dataset_model.pth")
+model_saved_path1 = PROJECT_ROOT / "MNIST/conv_cvae/model_saved_full_dataset"
+ckpt_path = model_saved_path1 / "full_dataset_model.pth"
 full_real_model.load_state_dict(torch.load(ckpt_path, map_location=device))
 discriminator_dataset = data_helper.prepare_discriminator_dataset(full_dataset, full_real_model, device)
 disc_loader = DataLoader(discriminator_dataset, batch_size=128, shuffle=True)
@@ -248,12 +240,6 @@ for round_id in range(1, k + 1):
     synthetic_size = int(size_schedule[round_id - 1])
     # (A) Train a fresh discriminator for the CURRENT generator
     print(f"\n[Round {round_id}] Training discriminator for current model...")
-    #discriminator_dataset = data_helper.prepare_discriminator_dataset(full_dataset, curr_model, device)
-    #disc_loader = DataLoader(discriminator_dataset, batch_size=128, shuffle=True)
-    #disc_model = models.SyntheticDiscriminator(input_dim=784).to(device)
-    #train_helper.train_model(model=disc_model, train_loader=disc_loader, device=device,
-    #                         epochs=80, lr=1e-3, patience=5, verbose=False)
-    #del disc_loader, discriminator_dataset
     # (B) Generate filtered synthetic dataset to a TEMP dir (unique per round)
     model_name = f'cvae_conv_init{init_size}_q{threshold}_s{synthetic_size}_r{round_id}'
     synthetic_data_load_path = os.path.join(data_saved_path, model_name)
