@@ -1,8 +1,7 @@
 # Verified-Synthetic-Data
 
-This repository contains **experimental code and scripts** for studying **iterative retraining with verified synthetic data** in generative models.
-
-The code is intended for **research and experimentation**, rather than as a polished or production-ready software package.
+This repository hosts the implementation for our research on iterative retraining with verified synthetic data in generative models ([arXiv: 2510.16657](https://arxiv.org/abs/2510.16657)).
+The code is maintained for research purposes and academic reproducibility.
 
 ---
 
@@ -47,19 +46,25 @@ The MNIST experiments investigate iterative retraining of a **Conditional Variat
 
 ---
 
-## Experimental Philosophy
+## Research Design
 
 This codebase reflects an **exploratory research workflow**:
 
-- Minimal abstraction and lightweight scripting
-- Explicit experiment logic over generalized APIs
-- Emphasis on interpretability and analysis of training dynamics
-
-As a result:
-
-- Code may be redundant or exploratory
-- Interfaces may change
-- Scripts are designed to be read and modified by researchers
+- Prioritizes explicit experiment logic over complex APIs.
+- Emphasis on interpretability and analysis of training dynamics.
+- Scripts are designed to be read and modified by researchers.
+- Interfaces may change to accommodate research needs.
 
 ---
+
+
+## Replication Instructions
+
+### MNIST ELBO experiments
+
+```bash
+cd MNIST/scripts
+python3 ELBO_experiments.py
+```
+
 
