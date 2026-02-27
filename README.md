@@ -57,3 +57,14 @@ This codebase reflects an **exploratory research workflow**:
 
 ---
 
+
+## Replication Instructions
+
+### MNIST ELBO experiments
+
+```bash
+cd MNIST/scripts
+python3 ELBO_experiments.py
+```
+
+
